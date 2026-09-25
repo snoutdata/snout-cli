@@ -131,6 +131,9 @@ A project comes from --ref, then SNOUTDATA_PROJECT, then
 .snoutdata/project.json in this folder or a parent. A token comes from
 SNOUTDATA_ACCESS_TOKEN, then ~/.snoutdata/auth.json. The session that login writes lasts
 an hour, so CI wants "tokens create", which does not expire.
+
+Docs: https://docs.snoutdata.com/cloud/cli
+Source: https://github.com/snoutdata/snout-cli (a star helps other people find it)
 `;
 
 async function run(args: ParsedArgs): Promise<number> {
