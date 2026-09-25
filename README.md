@@ -1,5 +1,7 @@
 # snoutdata
 
+Part of [snoutdata/snoutdata](https://github.com/snoutdata/snoutdata), where the docs and examples live.
+
 SnoutData Cloud projects from a terminal, or from an agent: a Postgres database with auth,
 storage, realtime and functions. One bundled file with no dependencies, so
 `npx snoutdata` is a download rather than an install. Needs Node 20 or newer.

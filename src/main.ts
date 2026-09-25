@@ -133,7 +133,8 @@ SNOUTDATA_ACCESS_TOKEN, then ~/.snoutdata/auth.json. The session that login writ
 an hour, so CI wants "tokens create", which does not expire.
 
 Docs: https://docs.snoutdata.com/cloud/cli
-Source: https://github.com/snoutdata/snout-cli (a star helps other people find it)
+Examples: https://github.com/snoutdata/snoutdata (a star helps other people find it)
+Source: https://github.com/snoutdata/snout-cli
 `;
 
 async function run(args: ParsedArgs): Promise<number> {
