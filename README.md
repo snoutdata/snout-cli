@@ -190,5 +190,5 @@ is using it and wakes on the next connection, while the client waits.
 
 ---
 
-© SnoutData. Licensed under the [Elastic License 2.0](./LICENSE). Use of SnoutData Cloud is
+© SnoutData. Licensed under the [Apache License 2.0](./LICENSE). Use of SnoutData Cloud is
 subject to <https://snoutdata.com/terms>.
