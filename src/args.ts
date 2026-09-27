@@ -73,7 +73,14 @@ const VALUED = new Set([
 	'site-url',
 	'allow',
 	// `auth template confirmation --subject S --file body.html`.
-	'subject'
+	'subject',
+	// `push credentials set apns --p8 AuthKey.p8 --key-id ID --team-id ID --topic BUNDLE
+	// --environment production|sandbox`. The .p8 is a FILE path, never the key on argv.
+	'p8',
+	'key-id',
+	'team-id',
+	'topic',
+	'environment'
 ]);
 
 

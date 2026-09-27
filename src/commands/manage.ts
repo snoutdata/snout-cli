@@ -13,32 +13,35 @@ import * as api from '../api.js';
 import { UsageError } from '../args.js';
 import { bold, dim, emit, say, table } from '../output.js';
 
-export type Product = 'auth' | 'storage' | 'data-api';
+export type Product = 'auth' | 'storage' | 'data-api' | 'push';
 
-export const PRODUCTS: readonly Product[] = ['auth', 'storage', 'data-api'];
+export const PRODUCTS: readonly Product[] = ['auth', 'storage', 'data-api', 'push'];
 
 export interface Products {
 	ref: string;
 	auth: { enabled: boolean; google: boolean; saml: boolean } | { error: string };
 	storage: { enabled: boolean; pending: boolean; bytes: number | null; files: number | null } | { error: string };
 	dataApi: { enabled: boolean; allowedOnPlan: boolean } | { error: string };
+	push: { enabled: boolean; scheduling: boolean } | { error: string };
 }
 
 function reason(error: unknown): { error: string } {
 	return { error: error instanceof Error ? error.message : String(error) };
 }
 
-/** All three, each allowed to fail on its own: one refusing must not hide the other two. */
+/** All four, each allowed to fail on its own: one refusing must not hide the others. */
 export async function getProducts(ref: string): Promise<Products> {
-	const [auth, storage, dataApi] = await Promise.all([
+	const [auth, storage, dataApi, push] = await Promise.all([
 		api.call<{ enabled?: boolean; google?: { enabled?: boolean }; saml?: { enabled?: boolean } }>('cloud-project-auth', { ref, action: 'status' })
 			.then((a) => ({ enabled: a.enabled === true, google: a.google?.enabled === true, saml: a.saml?.enabled === true }), reason),
 		api.call<{ storage?: { enabled: boolean; pending: boolean; bytes: number | null; files: number | null } }>('cloud-project-storage', { ref })
 			.then((a) => ({ enabled: a.storage?.enabled === true, pending: a.storage?.pending === true, bytes: a.storage?.bytes ?? null, files: a.storage?.files ?? null }), reason),
 		api.call<{ dataApi?: { enabled: boolean; allowed: boolean } }>('cloud-project-data-api', { ref })
 			.then((a) => ({ enabled: a.dataApi?.enabled === true, allowedOnPlan: a.dataApi?.allowed === true }), reason),
+		api.call<{ push?: { enabled: boolean; scheduling: boolean } }>('cloud-project-push', { ref })
+			.then((a) => ({ enabled: a.push?.enabled === true, scheduling: a.push?.scheduling === true }), reason),
 	]);
-	return { ref, auth, storage, dataApi };
+	return { ref, auth, storage, dataApi, push };
 }
 
 export function parseProduct(word: string | undefined): Product {
@@ -54,6 +57,17 @@ export async function setProduct(ref: string, product: Product, enabled: boolean
 	if (product === 'auth') {
 		const answer = await api.call<{ note?: string }>('cloud-project-auth', { ref, action: enabled ? 'enable' : 'disable' });
 		return { ref, product, enabled, note: answer.note ?? (enabled ? 'Auth starts within a minute.' : 'Auth stops. Your users stay in the auth schema.') };
+	}
+	if (product === 'push') {
+		await api.call('cloud-project-push', { ref, enable: enabled });
+		return {
+			ref,
+			product,
+			enabled,
+			note: enabled
+				? 'Push starts within a minute. It runs beside the database, so the database restarts once. Set keys with: snoutdata push credentials'
+				: 'Push is off. Devices, the log and the keys stay in the push schema.'
+		};
 	}
 	await api.call(product === 'storage' ? 'cloud-project-storage' : 'cloud-project-data-api', { ref, enable: enabled });
 	return { ref, product, enabled, note: enabled ? `${product} starts within a minute, when the host picks up the change.` : `${product} is off.` };
@@ -74,6 +88,7 @@ export async function productsCommand(ref: string): Promise<void> {
 			line('auth', answer.auth),
 			line('storage', storage, 'pending' in storage && storage.pending ? 'waiting for the host' : ''),
 			line('data-api', dataApi, 'allowedOnPlan' in dataApi && !dataApi.allowedOnPlan ? 'paid plans only' : ''),
+			line('push', answer.push, 'scheduling' in answer.push && answer.push.enabled && !answer.push.scheduling ? 'scheduled sends on paid plans' : ''),
 		])}\n`);
 		say(dim(`  snoutdata products enable storage --ref ${ref}`));
 	});
