@@ -54,7 +54,8 @@ This CLI is built to be driven by a program. The contract, which every command h
 export SNOUTDATA_ACCESS_TOKEN=sdt_...   # made once by a person: snoutdata tokens create
 ```
 
-`SNOUTDATA_ACCESS_TOKEN` outranks everything and never expires, which is what CI and an agent
+`SNOUTDATA_ACCESS_TOKEN` outranks everything and does not expire unless it was made with
+`--expires`, which is what CI and an agent
 should use: a script's behaviour should not depend on who happens to be logged in on the machine
 it runs on. Failing that, `~/.snoutdata/auth.json` (written by `snoutdata login`, mode 0600),
 whose session lasts an hour.
@@ -152,6 +153,10 @@ It needs **Podman** (not Docker, and deliberately with no fallback: a database t
 Docker and not under Podman is one that works here and not in the cloud). The database image is
 fetched from `ghcr.io/snoutdata/snoutpod-postgres` the first time you run it, which takes a few
 minutes once and nothing after that. Nothing else in this CLI needs anything installed at all.
+
+*Why not Docker?* The hosted database runs under Podman, rootless, so a local one that only worked
+under Docker could pass here and fail once deployed (file ownership and user mapping are where the
+two differ). Podman runs on Windows, macOS and Linux, and installs alongside Docker Desktop.
 
 **Agents**
 
