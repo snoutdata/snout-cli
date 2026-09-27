@@ -2,7 +2,7 @@
 	"name": "snoutdata",
 	"version": "0.5.0",
 	"description": "SnoutData Cloud projects from a terminal or an agent. Create a project with a Postgres database, get a DATABASE_URL, run migrations, and serve the same operations to an AI agent over MCP.",
-	"license": "Elastic-2.0",
+	"license": "Apache-2.0",
 	"author": "SnoutData",
 	"homepage": "https://snoutdata.com",
 	"bugs": {
@@ -30,7 +30,8 @@
 	"files": [
 		"dist",
 		"README.md",
-		"LICENSE"
+		"LICENSE",
+		"NOTICE"
 	],
 	"engines": {
 		"node": ">=20"
