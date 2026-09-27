@@ -33,6 +33,7 @@ import * as db from './commands/db.js';
 import * as manage from './commands/manage.js';
 import { authCommand } from './commands/auth.js';
 import { push } from './commands/push.js';
+import * as notifications from './commands/notifications.js';
 import { genTypes } from './commands/gen.js';
 import { livePods, localSql, start, status as localStatus, stop } from './commands/local.js';
 import { serve as serveMcp } from './commands/mcp.js';
@@ -69,8 +70,12 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
 
   snoutdata projects show [--ref R]        one project: state, products, functions, domains
 
-  snoutdata products [--ref R]             auth, storage and the data API: on or off
-  snoutdata products enable|disable auth|storage|data-api [--ref R]
+  snoutdata products [--ref R]             auth, storage, the data API and push: on or off
+  snoutdata products enable|disable auth|storage|data-api|push [--ref R]
+  snoutdata push credentials [--ref R]     push keys: what is set (never the keys)
+  snoutdata push credentials set apns --p8 FILE --key-id ID --team-id ID --topic BUNDLE [--environment E]
+  snoutdata push credentials set fcm --file service-account.json
+  snoutdata push credentials remove apns|fcm
   snoutdata auth [--ref R]                 Google sign-in and redirect addresses
   … | snoutdata auth google --client-id ID --stdin   your own Google client; secret on stdin
   snoutdata auth google off
@@ -411,6 +416,36 @@ async function run(args: ParsedArgs): Promise<number> {
 				return 0;
 			}
 			throw new UsageError(`unknown command: products ${action}. products [enable|disable ${manage.PRODUCTS.join('|')}]`);
+		}
+		case 'push': {
+			if (action !== 'credentials') {
+				throw new UsageError('push credentials [set apns|fcm | remove apns|fcm]');
+			}
+			const verb = rest[0];
+			if (verb === undefined || verb === 'list') {
+				await notifications.listCommand(ref());
+				return 0;
+			}
+			if (verb === 'set') {
+				const kind = notifications.parseKind(rest[1]);
+				const body =
+					kind === 'apns'
+						? await notifications.apnsBody({
+								p8: flagString(args, 'p8'),
+								keyId: flagString(args, 'key-id'),
+								teamId: flagString(args, 'team-id'),
+								topic: flagString(args, 'topic'),
+								environment: flagString(args, 'environment')
+							})
+						: await notifications.fcmBody(flagString(args, 'file'));
+				await notifications.setCommand(ref(), kind, body);
+				return 0;
+			}
+			if (verb === 'remove' || verb === 'unset') {
+				await notifications.removeCommand(ref(), notifications.parseKind(rest[1]));
+				return 0;
+			}
+			throw new UsageError(`unknown command: push credentials ${verb}`);
 		}
 		case 'auth': {
 			await authCommand(ref(), action, rest, {
