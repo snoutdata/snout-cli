@@ -14,7 +14,7 @@ export const COMMANDS = [
 	{ name: 'logout', summary: 'Forget the stored session', flags: [] },
 	{ name: 'whoami', summary: 'Who this credential belongs to', flags: [] },
 	{ name: 'tokens list', summary: 'Long-lived access tokens on this account', flags: [] },
-	{ name: 'tokens create', summary: 'Mint an sdt_ token for CI or an agent', flags: ['--name', '--expires'] },
+	{ name: 'tokens create', summary: 'Mint an sdt_ token for CI or an agent', flags: ['--name', '--expires', '--project'] },
 	{ name: 'tokens revoke', summary: 'Revoke one by id or prefix', flags: [] },
 	{ name: 'projects list', summary: 'Every project on this account', flags: [] },
 	{ name: 'projects create', summary: 'Make a hosted database', flags: ['--name', '--region', '--team', '--no-wait', '--timeout'] },

@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { handle, takeMessages, PROTOCOL_VERSION, TOOLS, type McpOperations, type McpOptions } from './mcp.js';
+import { expiryDays, handle, takeMessages, PROTOCOL_VERSION, TOOLS, type McpOperations, type McpOptions } from './mcp.js';
 
 function operations(over: Partial<McpOperations> = {}): McpOperations {
 	return {
@@ -393,4 +393,12 @@ test('a domain tool needs a hostname, and passes its verb through', async () => 
 test('restore_to_point needs a moment', async () => {
 	assert.ok(isError(await call('restore_to_point', { ref: 'r' })));
 	assert.match(text(await call('restore_to_point', { ref: 'r', at: '2026-09-20T10:00:00Z' })), /2026-09-20/);
+});
+
+test('create_token turns an expiry date into the days the control plane reads', () => {
+	const now = new Date('2026-09-29T12:00:00Z');
+	assert.equal(expiryDays('2026-10-29T12:00:00Z', now), 30);
+	assert.equal(expiryDays('2026-09-30', now), 1);
+	assert.equal(expiryDays('2026-09-01', now), null);
+	assert.equal(expiryDays('next tuesday', now), null);
 });

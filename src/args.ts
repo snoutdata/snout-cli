@@ -38,6 +38,8 @@ const VALUED = new Set([
 	// and nobody knows the name of their identity provider.
 	'domain',
 	'expires',
+	// `tokens create --project <ref>`: the one project the token reaches.
+	'project',
 	// `--timeout`: seconds to wait before giving up on anything that blocks. Every waiting
 	// path had a hardcoded ceiling (300s to create, 1800s to export) and no way to shorten
 	// it, which is fine for a person watching and useless inside a job with its own budget.

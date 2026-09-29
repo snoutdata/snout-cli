@@ -71,7 +71,7 @@ export interface McpOperations {
 	domainAction(ref: string, action: 'add' | 'verify' | 'remove', hostname: string): Promise<unknown>;
 	restoreWindow(ref: string): Promise<unknown>;
 	restoreTo(ref: string, at: string, name?: string): Promise<unknown>;
-	createToken(name: string, expires?: string): Promise<unknown>;
+	createToken(name: string, expiresInDays?: number, project?: string): Promise<unknown>;
 	revokeToken(id: string): Promise<unknown>;
 	/** Forward a borrowed tool to the desktop app. Absent when there is no app. */
 	callBorrowed?(name: string, args: unknown): Promise<unknown>;
@@ -203,8 +203,8 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'create_token',
-		description: 'Mint a long-lived sdt_ access token, for a CI job or another machine. RETURNS THE TOKEN ONCE AND NEVER AGAIN. It is as capable as this account, so hand it over deliberately. Optionally expires, as an ISO date.',
-		inputSchema: object({ name: STRING, expires: STRING }, ['name'])
+		description: 'Mint a long-lived sdt_ access token, for a CI job or another machine. RETURNS THE TOKEN ONCE AND NEVER AGAIN. Without `project` it is as capable as this account, so hand it over deliberately; with a project ref it reaches that one project and nothing else, which is what a CI job for one project should get. Optionally expires, as an ISO date.',
+		inputSchema: object({ name: STRING, expires: STRING, project: STRING }, ['name'])
 	},
 	{
 		name: 'revoke_token',
@@ -335,6 +335,20 @@ function fail(id: number | string | null, code: number, message: string): JsonRp
 function said(id: number | string | null, value: unknown, isError = false): JsonRpcResponse {
 	const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 	return ok(id, { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) });
+}
+
+/**
+ * The tool takes an expiry as a DATE, the control plane as a number of DAYS. Rounded up, so a
+ * token asked to last until a date lasts at least that long. Null for a date that is not one or
+ * is not in the future. Until 2026-09-29 the date was sent under a name the control plane never
+ * read, so every token made through this tool silently did not expire.
+ */
+export function expiryDays(iso: string, now = new Date()): number | null {
+	const at = Date.parse(iso);
+	if (!Number.isFinite(at) || at <= now.getTime()) {
+		return null;
+	}
+	return Math.ceil((at - now.getTime()) / 86_400_000);
 }
 
 function stringArg(params: Record<string, unknown>, name: string): string | null {
@@ -554,7 +568,12 @@ async function callTool(
 				if (!tokenName) {
 					return said(id, 'create_token needs a name, so somebody can tell later what it was for.', true);
 				}
-				return said(id, await operations.createToken(tokenName, stringArg(args, 'expires') ?? undefined));
+				const expires = stringArg(args, 'expires');
+				const days = expires ? expiryDays(expires) : undefined;
+				if (days === null) {
+					return said(id, `create_token: \`expires\` must be a date in the future, like 2026-12-31. Got "${expires}".`, true);
+				}
+				return said(id, await operations.createToken(tokenName, days, stringArg(args, 'project') ?? undefined));
 			}
 			case 'revoke_token': {
 				const tokenId = stringArg(args, 'id');
