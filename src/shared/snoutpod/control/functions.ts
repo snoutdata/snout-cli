@@ -409,6 +409,89 @@ export interface DeployedFunction {
 	 * at deploy time and recorded on the audit log.
 	 */
 	readonly verifyJwt: boolean;
+	/**
+	 * This function's own size, within its plan (`FunctionSize`, sql/100): the memory one
+	 * worker may use, and how many workers it may run at once. Absent from a control plane
+	 * older than 100, which leaves the runtime on the project's `limits` and one worker.
+	 */
+	readonly memoryMb?: number;
+	readonly concurrency?: number;
+}
+
+/**
+ * What a plan allows one function (sql/100), and the one rule that balances the two.
+ *
+ * A function's workers run in the host's shared runtime, not in the project's database pod,
+ * but they are sized AGAINST it: memory × concurrency may not exceed the pod's RAM. So a
+ * plan's database is also the measure of what its functions may hold at once, a customer
+ * can trade one for the other (four workers of 128 MB or two of 256), and a host's worst
+ * case for a project is bounded by a number placement already accounts for.
+ */
+export interface FunctionSizingCaps {
+	readonly tier: string;
+	/** The most memory one worker of a function may have (`cloud_limits.function_memory_mb`). */
+	readonly memoryMb: number;
+	/** The most workers one function may run at once (`cloud_limits.function_concurrency_max`). */
+	readonly concurrencyMax: number;
+	/** The project's database pod's RAM (`cloud_limits.pod_memory_mb`). */
+	readonly podMemoryMb: number;
+}
+
+export interface FunctionSize {
+	readonly memoryMb: number;
+	readonly concurrency: number;
+}
+
+/** What a customer chose: null for either is "the plan's default". */
+export interface FunctionSizeChoice {
+	readonly memoryMb: number | null;
+	readonly concurrency: number | null;
+}
+
+/**
+ * The size a function runs at: what was chosen, clamped to the plan it is on NOW.
+ *
+ * Clamped rather than refused, because a plan can shrink under a function (a downgrade, a
+ * seat removed from a team) and a function that stopped running over it would be an outage
+ * nobody asked for. A choice of null takes the plan's default: its full memory, and as many
+ * workers as fit the pod beside that, up to the plan's maximum. The same arithmetic runs in
+ * SQL (`cloud_function_sizes`, sql/100); `functions.test.ts` holds the table both follow.
+ */
+export function effectiveFunctionSize(caps: FunctionSizingCaps, chosen: FunctionSizeChoice): FunctionSize {
+	const memoryMb = Math.max(16, Math.min(chosen.memoryMb ?? caps.memoryMb, caps.memoryMb));
+	const fits = Math.max(1, Math.floor(caps.podMemoryMb / memoryMb));
+	const concurrency = Math.max(1, Math.min(chosen.concurrency ?? caps.concurrencyMax, caps.concurrencyMax, fits));
+	return { memoryMb, concurrency };
+}
+
+/**
+ * Whether a customer may set this size, and a sentence saying why not.
+ *
+ * Refused rather than clamped, unlike `effectiveFunctionSize`: this is somebody asking, and
+ * quietly running something other than what they asked for is how a setting stops being
+ * believed. A value left null is the one the function runs at now, so changing one number
+ * is judged against the other as it stands.
+ */
+export function checkFunctionSize(
+	caps: FunctionSizingCaps,
+	want: FunctionSizeChoice,
+	current: FunctionSize
+): { ok: true; size: FunctionSize } | { ok: false; reason: string } {
+	const memoryMb = want.memoryMb ?? current.memoryMb;
+	const concurrency = want.concurrency ?? current.concurrency;
+	if (!Number.isInteger(memoryMb) || memoryMb < 16 || memoryMb > caps.memoryMb) {
+		return { ok: false, reason: `memory is 16 to ${caps.memoryMb} MB on the ${caps.tier} plan` };
+	}
+	if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > caps.concurrencyMax) {
+		return { ok: false, reason: `concurrency is 1 to ${caps.concurrencyMax} on the ${caps.tier} plan` };
+	}
+	if (memoryMb * concurrency > caps.podMemoryMb) {
+		return {
+			ok: false,
+			reason: `${concurrency} workers of ${memoryMb} MB is ${memoryMb * concurrency} MB, more than this project's ${caps.podMemoryMb} MB on the ${caps.tier} plan. Lower one, or move to a larger plan.`
+		};
+	}
+	return { ok: true, size: { memoryMb, concurrency } };
 }
 
 /**

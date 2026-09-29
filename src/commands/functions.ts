@@ -50,12 +50,30 @@ interface DeployedFunction {
 	archived: boolean;
 	updatedAt: string | null;
 	url: string;
+	/** Its size as it runs (sql/100); null from a control plane older than that. */
+	memoryMb?: number | null;
+	concurrency?: number | null;
+	chosen?: { memoryMb: number | null; concurrency: number | null };
 }
 
 interface FunctionsAnswer {
 	ref: string;
 	functions: DeployedFunction[];
-	limit: { deployed: number | null; maxFunctions: number | null };
+	limit: {
+		deployed: number | null;
+		maxFunctions: number | null;
+		/** The plan's numbers a function is sized within (sql/100). */
+		tier?: string;
+		functionMemoryMb?: number;
+		concurrencyMax?: number;
+		podMemoryMb?: number;
+	};
+}
+
+export interface SizeOptions {
+	memoryMb?: number | undefined;
+	concurrency?: number | undefined;
+	reset?: boolean;
 }
 
 /** Where a function called `<name>` is looked for, in order. Only the first is ever named. */
@@ -234,6 +252,55 @@ export function runRemove(ref: string, name: string): Promise<FunctionsAnswer> {
 	return call<FunctionsAnswer>('cloud-project-functions', { ref, action: 'delete', name });
 }
 
+/**
+ * Set one function's memory and concurrency within the plan, or put them back to its default.
+ * The control plane judges it (`checkFunctionSize`) and refuses with the sentence printed.
+ */
+export function runSize(ref: string, name: string, options: SizeOptions): Promise<FunctionsAnswer> {
+	assertFunctionName(name);
+	if (!options.reset && options.memoryMb === undefined && options.concurrency === undefined) {
+		throw new UsageError('functions size needs --memory MB, --concurrency N, or --reset');
+	}
+	return call<FunctionsAnswer>('cloud-project-functions', {
+		ref,
+		action: 'size',
+		name,
+		...(options.reset ? { reset: true } : { memoryMb: options.memoryMb ?? null, concurrency: options.concurrency ?? null })
+	});
+}
+
+/** "512 MB x 4 workers = 2048 MB of 2048 MB", or null before sql/100. */
+function sizeLine(one: DeployedFunction, limit: FunctionsAnswer['limit']): string | null {
+	if (one.memoryMb == null || one.concurrency == null) {
+		return null;
+	}
+	const total = one.memoryMb * one.concurrency;
+	const of = limit.podMemoryMb ? ` of ${limit.podMemoryMb} MB` : '';
+	return `${one.memoryMb} MB x ${one.concurrency} worker${one.concurrency === 1 ? '' : 's'} = ${total} MB${of}`;
+}
+
+/** The plan's numbers, in one line. */
+function planLine(limit: FunctionsAnswer['limit']): string | null {
+	if (limit.functionMemoryMb == null || limit.concurrencyMax == null || limit.podMemoryMb == null) {
+		return null;
+	}
+	return `${limit.tier ?? 'this'} plan: up to ${limit.functionMemoryMb} MB a worker and ${limit.concurrencyMax} workers a function, memory x workers up to ${limit.podMemoryMb} MB`;
+}
+
+export async function size(ref: string, name: string, options: SizeOptions): Promise<void> {
+	const answer = await runSize(ref, name, options);
+	const sized = answer.functions.find((one) => one.name === name);
+	emit(answer, () => {
+		const line = sized ? sizeLine(sized, answer.limit) : null;
+		say(`${bold(name)} ${options.reset ? 'is back to the plan default' : 'is resized'}${line ? `: ${line}` : ''}`);
+		say(dim('  The next request runs at it; workers already running finish what they hold.'));
+		const plan = planLine(answer.limit);
+		if (plan) {
+			say(dim(`  ${plan}`));
+		}
+	});
+}
+
 export async function list(ref: string): Promise<void> {
 	const answer = await runList(ref);
 	emit(answer, () => {
@@ -244,19 +311,25 @@ export async function list(ref: string): Promise<void> {
 		}
 		process.stdout.write(
 			`${table([
-				['NAME', 'KEY', 'SIZE', 'URL'],
+				['NAME', 'KEY', 'SIZE', 'MEMORY', 'WORKERS', 'URL'],
 				...answer.functions.map((one) => [
 					one.name,
 					// The column a person scans for. "open" is the one that matters and it
 					// is the shorter word on purpose: it should catch the eye.
 					one.verifyJwt ? 'required' : bold('open'),
 					one.bytes === null ? '-' : `${Math.max(1, Math.round(one.bytes / 1024))} KB`,
+					one.memoryMb == null ? '-' : `${one.memoryMb} MB`,
+					one.concurrency == null ? '-' : String(one.concurrency),
 					one.url
 				])
 			])}\n`
 		);
 		if (answer.limit.maxFunctions !== null) {
 			say(dim(`${answer.limit.deployed} of ${answer.limit.maxFunctions} on this plan`));
+		}
+		const plan = planLine(answer.limit);
+		if (plan) {
+			say(dim(`${plan}. Change one with: snoutdata functions size <name> --memory MB --concurrency N`));
 		}
 	});
 }

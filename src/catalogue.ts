@@ -39,6 +39,7 @@ export const COMMANDS = [
 	{ name: 'domains remove', summary: 'Stop serving it', flags: ['--ref'] },
 	{ name: 'functions deploy', summary: 'Put a folder of TypeScript on the edge', flags: ['--ref', '--dir', '--entrypoint', '--no-verify-jwt'] },
 	{ name: 'functions list', summary: 'What this project has deployed', flags: ['--ref'] },
+	{ name: 'functions size', summary: 'Its memory and workers, within the plan', flags: ['--ref', '--memory', '--concurrency', '--reset'] },
 	{ name: 'functions delete', summary: 'Remove one', flags: ['--ref'] },
 	{ name: 'secrets set', summary: 'Set the environment functions run with', flags: ['--ref', '--stdin'] },
 	{ name: 'secrets list', summary: 'The names, never the values', flags: ['--ref'] },
