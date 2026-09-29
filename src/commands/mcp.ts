@@ -40,7 +40,7 @@ import { setJsonMode, warn } from '../output.js';
 import { TOOLS, handle, takeMessages, type McpOperations, type McpOptions, type ToolDefinition } from '../mcp.js';
 import * as desktop from '../desktop.js';
 import { runPush } from './push.js';
-import { runDeploy, runList, runRemove } from './functions.js';
+import { runDeploy, runList, runRemove, runSize } from './functions.js';
 
 /**
  * The impure half, in one object.
@@ -86,6 +86,7 @@ function operations(): McpOperations {
 		deployFunction: (ref, name, options) => runDeploy(ref, name, options).then((done) => done.answer),
 		listFunctions: (ref) => runList(ref),
 		deleteFunction: (ref, name) => runRemove(ref, name),
+		sizeFunction: (ref, name, options) => runSize(ref, name, options),
 		// Names and sizes. There is no tool that SETS one, and `McpOperations` says why.
 		listFunctionSecrets: (ref) => api.call('cloud-project-secrets', { ref }),
 		listTokens: () => api.call('cloud-token-list', {}),

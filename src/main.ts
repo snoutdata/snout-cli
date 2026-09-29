@@ -98,6 +98,8 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata functions deploy <name> [--dir D] [--no-verify-jwt]
                                            from functions/<name>, onto the edge
   snoutdata functions list [--ref R]
+  snoutdata functions size <name> [--memory MB] [--concurrency N] [--reset]
+                                           its memory and workers, within the plan
   snoutdata functions delete <name>
 
   snoutdata secrets set NAME=value [...]   the environment functions run with
@@ -363,6 +365,18 @@ async function run(args: ParsedArgs): Promise<number> {
 				case 'list':
 					await functions.list(ref());
 					return 0;
+				case 'size': {
+					const name = rest[0];
+					if (!name) {
+						throw new UsageError('functions size needs a name: snoutdata functions size <name> --memory MB --concurrency N');
+					}
+					await functions.size(ref(), name, {
+						memoryMb: flagNumber(args, 'memory'),
+						concurrency: flagNumber(args, 'concurrency'),
+						reset: flagBoolean(args, 'reset')
+					});
+					return 0;
+				}
 				case 'delete':
 				case 'remove': {
 					const name = rest[0];

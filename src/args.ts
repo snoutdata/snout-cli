@@ -70,6 +70,10 @@ const VALUED = new Set([
 	// it is not `index.ts`. A value rather than a convention because a bundle may have its
 	// own `index.ts` that is NOT the entrypoint, and guessing there runs the wrong file.
 	'entrypoint',
+	// `functions size <name> --memory 256 --concurrency 4`: one function's own size within the
+	// plan (sql/100). Memory per worker in MB, and how many workers it may run at once.
+	'memory',
+	'concurrency',
 	// `auth google --client-id`, `auth redirects --site-url --allow a,b`.
 	'client-id',
 	'site-url',
@@ -147,6 +151,8 @@ const KNOWN_BOOLEANS = new Set([
 	// somebody moving over types what they already type. It makes the URL callable by
 	// anybody who knows it, which is why the deploy prints what it did in words afterwards.
 	'no-verify-jwt',
+	// `functions size <name> --reset`: back to the plan's default size.
+	'reset',
 	// `secrets set NAME --stdin`: the value from a pipe rather than from the shell's
 	// history and `ps`. What a CI job should use.
 	'stdin',

@@ -52,6 +52,8 @@ export interface McpOperations {
 	): Promise<unknown>;
 	listFunctions(ref: string): Promise<unknown>;
 	deleteFunction(ref: string, name: string): Promise<unknown>;
+	/** A function's memory and concurrency within the plan (sql/100), or `reset` to its default. */
+	sizeFunction(ref: string, name: string, options: { memoryMb?: number; concurrency?: number; reset?: boolean }): Promise<unknown>;
 	/**
 	 * The names of a project's function secrets.
 	 *
@@ -221,8 +223,16 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'list_functions',
-		description: 'The functions deployed to a project, their URLs, sizes, and whether each one needs an API key. Costs nothing.',
+		description: "The functions deployed to a project, their URLs, bundle sizes, whether each one needs an API key, and each one's memory and concurrency with the plan's limits for both. Costs nothing.",
 		inputSchema: object({ ref: STRING }, ['ref'])
+	},
+	{
+		name: 'size_function',
+		description: "Set one function's memory (MB one worker may use) and concurrency (how many workers it may run at once), within the project's plan. memoryMb x concurrency may not exceed the project's memory; list_functions shows each function's size and the plan's limits (limit.functionMemoryMb, limit.concurrencyMax, limit.podMemoryMb). A size that does not fit is refused with a sentence saying why. Omit one to keep it as it runs now; reset: true goes back to the plan's default. A second worker only helps CPU-bound work: requests that wait on the network share one.",
+		inputSchema: object(
+			{ ref: STRING, name: STRING, memoryMb: { type: 'integer' }, concurrency: { type: 'integer' }, reset: { type: 'boolean' } },
+			['ref', 'name']
+		)
 	},
 	{
 		name: 'delete_function',
@@ -545,6 +555,20 @@ async function callTool(
 					return said(id, 'list_functions needs a project ref.', true);
 				}
 				return said(id, await operations.listFunctions(ref));
+			}
+			case 'size_function': {
+				const ref = stringArg(args, 'ref');
+				const functionName = stringArg(args, 'name');
+				if (!ref || !functionName) {
+					return said(id, 'size_function needs a project ref and a function name.', true);
+				}
+				const memoryMb = typeof args.memoryMb === 'number' ? args.memoryMb : undefined;
+				const concurrency = typeof args.concurrency === 'number' ? args.concurrency : undefined;
+				const reset = args.reset === true;
+				if (!reset && memoryMb === undefined && concurrency === undefined) {
+					return said(id, 'size_function needs memoryMb, concurrency, or reset: true.', true);
+				}
+				return said(id, await operations.sizeFunction(ref, functionName, { memoryMb, concurrency, reset }));
 			}
 			case 'delete_function': {
 				const ref = stringArg(args, 'ref');
