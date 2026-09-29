@@ -204,7 +204,7 @@ export interface Who {
 	/** Which door this credential came in by. */
 	via: 'jwt' | 'token';
 	/** The access token in use, when there is one. */
-	token: { id: string; name: string; prefix: string } | null;
+	token: { id: string; name: string; prefix: string; project?: string | null } | null;
 }
 
 /**

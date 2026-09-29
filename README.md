@@ -55,7 +55,8 @@ export SNOUTDATA_ACCESS_TOKEN=sdt_...   # made once by a person: snoutdata token
 ```
 
 `SNOUTDATA_ACCESS_TOKEN` outranks everything and does not expire unless it was made with
-`--expires`, which is what CI and an agent
+`--expires`. Made with `--project REF`, it reaches that one project and nothing else. It is what
+CI and an agent
 should use: a script's behaviour should not depend on who happens to be logged in on the machine
 it runs on. Failing that, `~/.snoutdata/auth.json` (written by `snoutdata login`, mode 0600),
 whose session lasts an hour.
@@ -99,7 +100,7 @@ snoutdata login --device              # print a code to type into a browser anyw
 snoutdata login --no-browser          # print the URL instead of opening one
 snoutdata logout
 snoutdata whoami
-snoutdata tokens create --name ci [--expires DAYS]
+snoutdata tokens create --name ci [--expires DAYS] [--project REF]
 snoutdata tokens list
 snoutdata tokens revoke <id|sdt_prefix>
 ```

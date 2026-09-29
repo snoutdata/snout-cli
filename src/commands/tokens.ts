@@ -30,9 +30,15 @@ export interface AccessToken {
 	revokedAt: string | null;
 	live: boolean;
 	current: boolean;
+	/** The one project it reaches; null for the whole account. */
+	project: string | null;
 }
 
-export async function create(options: { name: string; expiresInDays?: number | undefined }): Promise<void> {
+export async function create(options: {
+	name: string;
+	expiresInDays?: number | undefined;
+	project?: string | undefined;
+}): Promise<void> {
 	const created = await call<{
 		token: string;
 		id: string;
@@ -40,12 +46,18 @@ export async function create(options: { name: string; expiresInDays?: number | u
 		prefix: string;
 		createdAt: string;
 		expiresAt: string | null;
-	}>('cloud-token-create', { name: options.name, expiresInDays: options.expiresInDays });
+		project: string | null;
+	}>('cloud-token-create', {
+		name: options.name,
+		expiresInDays: options.expiresInDays,
+		...(options.project ? { project: options.project } : {})
+	});
 
 	emit(created, () => {
 		process.stdout.write(`${created.token}\n`);
 		say('');
 		say(`${bold(created.name)} — ${created.expiresAt ? `expires ${created.expiresAt.slice(0, 10)}` : 'does not expire'}.`);
+		say(created.project ? `Reaches project ${created.project} only.` : 'Reaches every project on this account.');
 		say('This is the only time it is shown: only its hash is stored.');
 		say(dim('  export SNOUTDATA_ACCESS_TOKEN=<that token>'));
 	});
@@ -60,10 +72,11 @@ export async function list(): Promise<void> {
 		}
 		process.stdout.write(
 			`${table([
-				['PREFIX', 'NAME', 'STATE', 'LAST USED', 'EXPIRES'],
+				['PREFIX', 'NAME', 'PROJECT', 'STATE', 'LAST USED', 'EXPIRES'],
 				...tokens.map((t) => [
 					t.current ? bold(t.prefix) : t.prefix,
 					t.name,
+					t.project ?? 'all',
 					t.revokedAt ? 'revoked' : t.live ? 'live' : 'expired',
 					relative(t.lastUsedAt),
 					t.expiresAt ? t.expiresAt.slice(0, 10) : 'never'

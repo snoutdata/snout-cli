@@ -89,7 +89,12 @@ function operations(): McpOperations {
 		// Names and sizes. There is no tool that SETS one, and `McpOperations` says why.
 		listFunctionSecrets: (ref) => api.call('cloud-project-secrets', { ref }),
 		listTokens: () => api.call('cloud-token-list', {}),
-		createToken: (name, expires) => api.call('cloud-token-create', { name, ...(expires ? { expires } : {}) }),
+		createToken: (name, expiresInDays, project) =>
+			api.call('cloud-token-create', {
+				name,
+				...(expiresInDays ? { expiresInDays } : {}),
+				...(project ? { project } : {})
+			}),
 		revokeToken: (id) => api.call('cloud-token-revoke', { id }),
 		getProject: (ref) => manage.getProject(ref),
 		getProducts: (ref) => manage.getProducts(ref),

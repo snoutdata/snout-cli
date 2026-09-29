@@ -59,7 +59,7 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata logout
   snoutdata whoami
 
-  snoutdata tokens create --name ci [--expires DAYS]   a credential for CI, shown once
+  snoutdata tokens create --name ci [--expires DAYS] [--project REF]   a credential for CI, shown once
   snoutdata tokens list
   snoutdata tokens revoke <id|sdt_prefix>
 
@@ -270,7 +270,9 @@ async function run(args: ParsedArgs): Promise<number> {
 			emit(me, () => {
 				process.stdout.write(`${me.email ?? me.id}\n`);
 				if (me.token) {
-					say(`via access token ${me.token.prefix} (${me.token.name}).`);
+					say(
+						`via access token ${me.token.prefix} (${me.token.name})${me.token.project ? `, limited to project ${me.token.project}` : ''}.`
+					);
 				}
 			});
 			return 0;
@@ -286,7 +288,11 @@ async function run(args: ParsedArgs): Promise<number> {
 					if (!name) {
 						throw new UsageError('tokens create needs --name (what is it for, and where does it live)');
 					}
-					await tokens.create({ name, expiresInDays: flagNumber(args, 'expires') });
+					await tokens.create({
+						name,
+						expiresInDays: flagNumber(args, 'expires'),
+						project: flagString(args, 'project')
+					});
 					return 0;
 				}
 				case 'revoke': {
