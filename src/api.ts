@@ -14,10 +14,10 @@ import { isExpired, readAuth, writeAuth, type StoredAuth } from './config.js';
 import { explainNoHuman, noHumanReason } from './interactive.js';
 import { climb } from './ladder.js';
 
-export const UPSTREAM_URL = process.env.SNOUTDATA_UPSTREAM_URL ?? 'https://accounts.snoutdata.com';
+export const ACCOUNTS_URL = process.env.SNOUTDATA_ACCOUNTS_URL ?? 'https://accounts.snoutdata.com';
 export const ANON_KEY =
 	process.env.SNOUTDATA_ANON_KEY ?? 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpmN2c2NW1iOGZhcmEiLCJyb2xlIjoiYW5vbiIsImlhdCI6MTc4OTUxNTUyNCwiZXhwIjoyMTA0ODc1NTI0fQ.TiFJbsmmELR8FIje8lbg-95UJFtoj7IwmC2PZtWPAk8';
-export const FUNCTIONS = `${UPSTREAM_URL}/functions/v1`;
+export const FUNCTIONS = `${ACCOUNTS_URL}/functions/v1`;
 
 export class ApiError extends Error {
 	readonly status: number;
@@ -83,8 +83,8 @@ export interface Connection {
 	ssl: string;
 	uri: string;
 	/**
-	 * The project's API keys: two HS256 JWTs carrying a `role` claim, which is what
-	 * `@upstream/upstream-js` presents (STACK.md S2). Derived from the project's signing
+	 * The project's API keys: two HS256 JWTs carrying a `role` claim, which is what a client
+	 * presents (STACK.md S2). Derived from the project's signing
 	 * secret on every read rather than stored, so they are the same string every time
 	 * until somebody rotates them.
 	 *
@@ -130,7 +130,7 @@ async function currentToken(): Promise<string> {
 	if (!isExpired(auth) || !auth.refreshToken) {
 		return auth.accessToken;
 	}
-	const response = await fetch(`${UPSTREAM_URL}/auth/v1/token?grant_type=refresh_token`, {
+	const response = await fetch(`${ACCOUNTS_URL}/auth/v1/token?grant_type=refresh_token`, {
 		method: 'POST',
 		headers: { apikey: ANON_KEY, 'Content-Type': 'application/json' },
 		body: JSON.stringify({ refresh_token: auth.refreshToken })

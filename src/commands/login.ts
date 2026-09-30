@@ -1,32 +1,31 @@
 /**
  * Signing in, without typing a password into a terminal.
  *
- * The browser flow, PKCE, with a callback on loopback — the same shape the Upstream CLI
- * and `gh` use, and for the same reasons: the password never reaches this process, the
+ * The browser flow, PKCE, with a callback on loopback — the same shape `gh` uses, and for the same reasons: the password never reaches this process, the
  * code that comes back is useless without a verifier this process never sent anywhere,
  * and it works with Google and GitHub as well as email.
  *
- * ## Google does not go through Upstream, and that is the whole of the 2026-09-07 fix
+ * ## Google does not go through the auth server's redirect, and that is the whole of the 2026-09-07 fix
  *
- * `/auth/v1/authorize?provider=google` uses the Google client configured INSIDE Upstream
- * Auth, which belongs to a GCP project we no longer use and has been deleted. It answers
+ * `/auth/v1/authorize?provider=google` used the Google client configured inside the auth
+ * server of the day, which belonged to a GCP project we no longer use and has been deleted. It answers
  * `401 deleted_client`. Nobody noticed for months because this CLI was the only surface
  * still using that door, and it had never been driven by a person.
  *
  * So Google now takes the path the desktop app already takes (`googleNativeAuth.ts`): run
  * the authorization-code flow against Google ourselves, on loopback with PKCE, and hand the
- * resulting ID token to Upstream, which verifies it against its accepted client-id list.
+ * resulting ID token to the auth server, which verifies it against its accepted client-id list.
  * That list already contains this client, because the desktop depends on it.
  *
- * **What was deliberately NOT done instead.** Repointing Upstream's Google provider at the
+ * **What was deliberately NOT done instead.** Repointing the auth server's Google provider at the
  * live client is one dashboard field and would have fixed this too, but that same field is
  * what verifies the ID tokens the website, the dashboard and the desktop already send: a
  * wrong edit there breaks three working surfaces to fix one broken one. `docs/cli/PLAN.md` D10 is
  * where that gets settled properly, once, for every surface.
  *
- * **GitHub stays on the Upstream redirect flow**, exactly as it does in the desktop, because
+ * **GitHub stays on the auth server's redirect flow**, exactly as it does in the desktop, because
  * GitHub issues no ID token and there is therefore nothing to hand to `grant_type=id_token`.
- * Its Upstream provider is healthy. That is why the branch below is on the provider rather
+ * Its provider there is healthy. That is why the branch below is on the provider rather
  * than on a flag.
  *
  * **`SNOUTDATA_ACCESS_TOKEN` skips all of it.** That is the path CI and an agent take,
@@ -53,7 +52,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createInterface } from 'node:readline/promises';
 import { spawn } from 'node:child_process';
-import { ANON_KEY, UPSTREAM_URL } from '../api.js';
+import { ACCOUNTS_URL, ANON_KEY } from '../api.js';
 import { UsageError } from '../args.js';
 import { writeAuth } from '../config.js';
 import { CliFailure, codeForStatus } from '../failure.js';
@@ -166,14 +165,14 @@ function open(url: string): void {
 }
 
 // Google's own endpoints. We talk to these directly for Google; every other provider still
-// goes through Upstream.
+// goes through the auth server's redirect.
 const GOOGLE_AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 
 // The SAME "Desktop app" OAuth client the desktop uses (`googleNativeAuth.ts`, kept in step
 // with this by hand: one client, written down twice, which is one of the things D10 exists to
-// collapse). Reusing it rather than registering another is the point. It is already in Upstream
-// Auth's accepted Client IDs, so `grant_type=id_token` accepts what it mints, which is why this
+// collapse). Reusing it rather than registering another is the point. It is already in the auth
+// server's accepted Client IDs, so `grant_type=id_token` accepts what it mints, which is why this
 // fix needed no change in either console.
 //
 // For an installed app Google states the client secret is NOT confidential: it ships in the
@@ -205,7 +204,7 @@ function googleClientSecret(): string {
 /**
  * The nonce, in the two forms it has to exist in at once.
  *
- * Google is given the SHA-256 hex and puts it in the token's `nonce` claim. Upstream is
+ * Google is given the SHA-256 hex and puts it in the token's `nonce` claim. The auth server is
  * given the RAW value, hashes it itself, and compares. Send the same form to both and
  * verification fails — with a message about the nonce that does not say which end is wrong.
  * Exported so a test can hold the two apart; nothing else should call it.
@@ -249,8 +248,8 @@ export function googleAuthorizeUrl(parts: {
  * asks for `/favicon.ico`, and treating that as the redirect closes the server before the
  * real one lands. Kept pure so all four outcomes are testable without a socket.
  *
- * `expectedState` is absent for the flows that go through Upstream (GitHub, SSO): the
- * state there belongs to the auth server, which keeps its own and hands back only a code, so there
+ * `expectedState` is absent for the flows that go through the auth server (GitHub, SSO): the
+ * state there belongs to it, and it keeps its own and hands back only a code, so there
  * is nothing of ours to compare. The PKCE verifier is what binds that code to this
  * process. Google, which we drive ourselves, sends a state and it is checked.
  */
@@ -355,9 +354,9 @@ async function codeFromBrowser(options: {
 	});
 }
 
-/** The the auth server end of every PKCE flow: one code, one verifier, one session. */
+/** The auth server's end of every PKCE flow: one code, one verifier, one session. */
 async function exchangePkceCode(code: string, verifier: string): Promise<LoginResult> {
-	const response = await fetch(`${UPSTREAM_URL}/auth/v1/token?grant_type=pkce`, {
+	const response = await fetch(`${ACCOUNTS_URL}/auth/v1/token?grant_type=pkce`, {
 		method: 'POST',
 		headers: { apikey: ANON_KEY, 'Content-Type': 'application/json' },
 		body: JSON.stringify({ auth_code: code, code_verifier: verifier })
@@ -368,7 +367,7 @@ async function exchangePkceCode(code: string, verifier: string): Promise<LoginRe
 	return storeSession(await response.json());
 }
 
-/** Google hands back an ID token; Upstream is what turns it into a session. */
+/** Google hands back an ID token; the auth server is what turns it into a session. */
 async function exchangeCodeForIdToken(
 	code: string,
 	verifier: string,
@@ -400,10 +399,10 @@ async function exchangeCodeForIdToken(
 }
 
 /**
- * The Google half: loopback + PKCE against Google, then Upstream's `grant_type=id_token`.
+ * The Google half: loopback + PKCE against Google, then the auth server's `grant_type=id_token`.
  *
- * The nonce goes to Google HASHED and to Upstream RAW, and that is not a detail to tidy:
- * Upstream hashes what it is given and compares it against the token's claim, so sending the
+ * The nonce goes to Google HASHED and to the auth server RAW, and that is not a detail to tidy:
+ * the auth server hashes what it is given and compares it against the token's claim, so sending the
  * same form to both fails verification.
  */
 async function loginWithGoogle(options: {
@@ -423,7 +422,7 @@ async function loginWithGoogle(options: {
 	});
 
 	const idToken = await exchangeCodeForIdToken(code, verifier, redirectUri);
-	const response = await fetch(`${UPSTREAM_URL}/auth/v1/token?grant_type=id_token`, {
+	const response = await fetch(`${ACCOUNTS_URL}/auth/v1/token?grant_type=id_token`, {
 		method: 'POST',
 		headers: { apikey: ANON_KEY, 'Content-Type': 'application/json' },
 		body: JSON.stringify({ provider: 'google', id_token: idToken, nonce: rawNonce })
@@ -484,7 +483,7 @@ export function ssoDomain(input: string): string | null {
 	return /^[a-z]{2,}$/.test(tld) ? domain : null;
 }
 
-/** Whatever sentence a the auth server error body is carrying, under whichever key it used. */
+/** Whatever sentence an auth server error body is carrying, under whichever key it used. */
 function messageFromBody(body: string): string {
 	try {
 		const parsed = JSON.parse(body) as Record<string, unknown>;
@@ -506,7 +505,7 @@ function messageFromBody(body: string): string {
  * What to tell somebody whose single sign-on could not be started.
  *
  * The case that matters is the ordinary one and it is not an error in the product: nobody
- * has connected an identity provider for that domain yet. the auth server answers 404, and a raw
+ * has connected an identity provider for that domain yet. The auth server answers 404, and a raw
  * "404" or "No SSO provider assigned for this domain" reads as a fault in the CLI. It is
  * not, and the person has somewhere to go, so the sentence names the DOMAIN they asked for
  * and points at whoever administers their team.
@@ -552,7 +551,7 @@ async function ssoAuthorizeUrl(parts: {
 	redirectTo: string;
 	challenge: string;
 }): Promise<string> {
-	const response = await fetch(`${UPSTREAM_URL}/auth/v1/sso`, {
+	const response = await fetch(`${ACCOUNTS_URL}/auth/v1/sso`, {
 		method: 'POST',
 		headers: { apikey: ANON_KEY, 'Content-Type': 'application/json' },
 		body: JSON.stringify({
@@ -675,7 +674,7 @@ export async function login(
 		return loginWithSso(options);
 	}
 	// Google is the default and the only provider with a native path. Anything else (GitHub
-	// today) has no ID token to offer, so it keeps the Upstream redirect flow below.
+	// today) has no ID token to offer, so it keeps the auth server's redirect flow below.
 	const provider = options.provider ?? 'google';
 	if (provider === 'google') {
 		return loginWithGoogle(options);
@@ -687,7 +686,7 @@ export async function login(
 		timeoutMs: options.timeoutMs,
 		noBrowser: options.noBrowser,
 		authorizeUrl: (redirect) => {
-			const authorize = new URL(`${UPSTREAM_URL}/auth/v1/authorize`);
+			const authorize = new URL(`${ACCOUNTS_URL}/auth/v1/authorize`);
 			authorize.searchParams.set('provider', provider);
 			authorize.searchParams.set('redirect_to', redirect);
 			authorize.searchParams.set('code_challenge', challenge);

@@ -310,9 +310,9 @@ export interface StartResult {
 }
 
 /**
- * The default port. 54322, which is what `upstream start` publishes its Postgres on, so a
- * `.env` written for one works against the other and neither collides with a Postgres somebody
- * has installed on 5432.
+ * The default port. 54322, a common choice for a local development Postgres, so a `.env` written
+ * for another such tool works here, and it does not collide with a Postgres somebody has
+ * installed on 5432.
  */
 export const DEFAULT_PORT = 54322;
 

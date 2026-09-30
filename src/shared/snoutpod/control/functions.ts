@@ -65,8 +65,8 @@ export const BUNDLE_FORMAT = 1;
  * consumer trusts it afterwards. No dot and no slash is the security half: a name that
  * cannot contain `..` or `/` is a name no path built from it can escape with.
  *
- * Deliberately a superset of the kebab-case Upstream examples use and a subset of what a
- * filesystem would take, so a function called `send-email` and one called `sendEmail`
+ * Deliberately wide enough for the kebab-case names functions are usually given and a subset
+ * of what a filesystem would take, so a function called `send-email` and one called `sendEmail`
  * both work and neither can be `../../etc`.
  */
 const FUNCTION_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,47}$/;
@@ -115,9 +115,9 @@ export function functionNameFromPath(path: string): string | null {
  * stops a bundle writing outside it. It is checked when a bundle is BUILT and again when
  * one is READ, because the two happen on different machines and only one of them is ours.
  */
-// A leading underscore is allowed because `_shared/` is Upstream's own convention for code
-// every function imports (`upstream/functions/_shared`), and the control plane's functions use
-// it. A leading dot is still refused: that is `.env`.
+// A leading underscore is allowed because `_shared/` is the usual folder for code every function
+// imports, and the control plane's functions use it. A leading dot is still refused: that is
+// `.env`.
 const PATH_SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
 
 export function isBundlePath(value: string): boolean {
@@ -349,7 +349,7 @@ function clamp(value: number | null | undefined, fallback: number, low: number, 
 /**
  * The hard CPU limit, derived rather than configured.
  *
- * functions-runtime takes two: a SOFT limit, at which it asks the isolate to stop and lets it
+ * The function runtime takes two: a SOFT limit, at which it asks the isolate to stop and lets it
  * write a response, and a HARD one, at which the isolate is destroyed. Making the hard
  * one a separate configuration value would mean two numbers a person has to keep in a
  * relationship they cannot see; making it a multiple means the soft limit is the only
@@ -383,14 +383,13 @@ export interface ProjectFunctionManifest {
 	readonly functions: readonly DeployedFunction[];
 	readonly limits: InvocationLimits;
 	/**
-	 * The customer's own secrets, already unwrapped, plus the few we set for them.
-	 * Every function in the project gets all of them, which is what Upstream does and
-	 * what a customer moving from it expects.
+	 * The customer's own secrets, already unwrapped, plus the few we set for them
+	 * (`PLATFORM_FUNCTION_ENV`). Every function in the project gets all of them.
 	 *
-	 * Composed in the CONTROL PLANE, including the `UPSTREAM_*` variables, and written
-	 * out by the host verbatim. The host could derive the URL and mint the keys — it has
-	 * neither the key-minting code nor a reason to learn what a Upstream variable is, and
-	 * a second place that mints an `anon` key is two `anon` keys for one project.
+	 * Composed in the CONTROL PLANE, the platform's variables included, and written out by
+	 * the host verbatim. The host could derive the URL and mint the keys — it has neither
+	 * the key-minting code nor a reason to, and a second place that mints an `anon` key is
+	 * two `anon` keys for one project.
 	 */
 	readonly env: Readonly<Record<string, string>>;
 }
@@ -403,8 +402,7 @@ export interface DeployedFunction {
 	 * Whether the runtime refuses a call with no valid project JWT before the function
 	 * is started.
 	 *
-	 * Upstream's default is on, and so is ours: a function is arbitrary code with a
-	 * network attached, and the failure of getting the default wrong is a stranger
+	 * On by default: a function is arbitrary code with a network attached, and the failure of getting the default wrong is a stranger
 	 * running it. A webhook receiver turns it off deliberately, which is a choice made
 	 * at deploy time and recorded on the audit log.
 	 */
@@ -498,38 +496,39 @@ export function checkFunctionSize(
  * A secret's NAME, which is the half of a secret that is not a secret.
  *
  * Environment variables, so the C rule, plus a refusal of the names the runtime sets
- * itself. Letting a customer set `UPSTREAM_SERVICE_ROLE_KEY` would not be a
+ * itself. Letting a customer set `SNOUTDATA_SERVICE_ROLE_KEY` would not be a
  * vulnerability — it is their own project's key — but letting them set the ones that say
  * WHICH project this is would be, so the reserved list is checked and not assumed.
  */
 const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 
 /**
- * Names a customer may not take, because the runtime writes them and something downstream
- * believes them.
- *
- * `SNOUT_*` is ours by prefix. The three Upstream ones are set from the project's own
- * keys, so overwriting them would only break the customer's own function — they are
- * refused anyway, because a value that is silently ignored is worse than a refusal, and
- * because a function that reads `UPSTREAM_URL` and gets a lie is a debugging session
- * nobody wins.
+ * What every function is given without asking: where its project's API is, and the project's
+ * two keys, so a function can call its own project with no configuration at all.
  */
-export const RESERVED_SECRET_NAMES: readonly string[] = [
-	'UPSTREAM_URL',
-	'UPSTREAM_ANON_KEY',
-	'UPSTREAM_SERVICE_ROLE_KEY',
-	'UPSTREAM_DB_URL'
-];
+export const PLATFORM_FUNCTION_ENV = {
+	url: 'SNOUTDATA_URL',
+	anonKey: 'SNOUTDATA_ANON_KEY',
+	serviceRoleKey: 'SNOUTDATA_SERVICE_ROLE_KEY'
+} as const;
+
+/**
+ * Prefixes a customer may not take, because the runtime writes those names and something
+ * downstream believes them. `SNOUTDATA_*` is `PLATFORM_FUNCTION_ENV`'s, set from the project's
+ * own keys: overwriting one would only break the customer's own function, and it is refused
+ * anyway, because a value that is silently ignored is worse than a refusal, and a function
+ * that reads `SNOUTDATA_URL` and gets a lie is a debugging session nobody wins. `SNOUT_*` is
+ * the runtime's own.
+ */
+export const RESERVED_SECRET_PREFIXES: readonly string[] = ['SNOUTDATA_', 'SNOUT_'];
 
 export function checkSecretName(name: string): string | null {
 	if (!SECRET_NAME.test(name)) {
 		return `${JSON.stringify(name)} is not an environment variable name: letters, digits and underscores, not starting with a digit.`;
 	}
-	if (name.startsWith('SNOUT_')) {
-		return `names beginning with SNOUT_ are set by the platform, so ${name} cannot be one of yours.`;
-	}
-	if (RESERVED_SECRET_NAMES.includes(name)) {
-		return `${name} is set for you from this project's own keys and cannot be overridden.`;
+	const prefix = RESERVED_SECRET_PREFIXES.find((one) => name.startsWith(one));
+	if (prefix) {
+		return `names beginning with ${prefix} are set by the platform, so ${name} cannot be one of yours.`;
 	}
 	return null;
 }

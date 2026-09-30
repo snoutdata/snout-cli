@@ -26,7 +26,7 @@ import {
 test('the nonce exists in two forms at once, and they are not interchangeable', () => {
 	const { raw, hashed } = nonceForGoogle();
 
-	// Google is given the hash and puts it in the token claim; Upstream is given the raw
+	// Google is given the hash and puts it in the token claim; the auth server is given the raw
 	// value and hashes it itself. Send one where the other belongs and verification fails
 	// with a message about the nonce that does not say which end sent the wrong form.
 	assert.notEqual(raw, hashed);
@@ -52,7 +52,7 @@ test('the authorize URL carries the parameters whose absence is silent', () => {
 	assert.equal(url.origin + url.pathname, 'https://accounts.google.com/o/oauth2/v2/auth');
 
 	// The client the build was given. Which client that is (the installed-app one, NOT the
-	// deleted one inside Upstream Auth) is a fact about the build's environment now, not this file.
+	// deleted one inside the old auth server) is a fact about the build's environment now, not this file.
 	assert.equal(url.searchParams.get('client_id'), 'the-client.apps.googleusercontent.com');
 
 	// Without prompt=select_account, Google silently reuses whichever account the browser

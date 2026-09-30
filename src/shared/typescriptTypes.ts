@@ -4,12 +4,12 @@
 /*---------------------------------------------------------------------------------------------
  *  A database schema, as TypeScript. Ours, and for every driver.
  *
- *  `upstream gen types typescript` is a CLI wrapper that starts `pg-meta`, which runs
- *  plain SQL against `pg_catalog` and hands the JSON to a generator. We already have the
+ *  A type generator needs two halves: plain SQL against the catalogue, and a generator for the
+ *  JSON it returns. We already have the
  *  introspection half — {@link DatabaseSchema}, filled by `src/server/src/drivers/*​/
  *  introspection.ts` for eleven backends — so the only thing missing was the generator, and
- *  this is it (`docs/cloud/STACK.md` S12). The consequence is the part Upstream cannot copy:
- *  the same command works against MySQL, SQL Server, Oracle, SQLite and the rest, because the
+ *  this is it (`docs/cloud/STACK.md` S12). The consequence is the part a Postgres-only
+ *  generator cannot copy: the same command works against MySQL, SQL Server, Oracle, SQLite and the rest, because the
  *  schema model it reads was never Postgres-shaped.
  *
  *  ## Why this is beside `shared/engine/` rather than inside it
@@ -28,7 +28,7 @@
  *
  *  ## What it emits
  *
- *  The shape `@upstream/upstream-js` generics consume, verified against real generated files
+ *  The shape the v2 client API's generics consume, verified against real generated files
  *  rather than remembered: `Json`, `Database` with one block per schema
  *  (`Tables`/`Views`/`Functions`/`Enums`/`CompositeTypes`), `Row`/`Insert`/`Update` per table,
  *  a `Relationships` array per relation, then the `Tables<>`/`TablesInsert<>`/`TablesUpdate<>`/
@@ -83,14 +83,6 @@ export interface TypeGenOptions {
 	 */
 	readonly defaultSchema?: string;
 	readonly enums?: readonly TypeGenEnum[];
-	/**
-	 * The PostgREST version to declare in `__InternalUpstream`, or absent for none.
-	 *
-	 * Off by default and deliberately so: the block exists to let `createClient` pick its own
-	 * options, and stating a version of a server we are not yet running would be a claim rather
-	 * than a fact (`docs/cloud/STACK.md` Phase D).
-	 */
-	readonly postgrestVersion?: string | null;
 	/** Emit the `Tables<>`/`TablesInsert<>`/… helper block. On unless switched off. */
 	readonly helpers?: boolean;
 	/** Emit the `Constants` object. On unless switched off. */
@@ -445,11 +437,6 @@ export function emitTypeScriptTypes(schema: DatabaseSchema, options: TypeGenOpti
 	out.push('  | Json[]');
 	out.push('');
 	out.push('export type Database = {');
-	if (options.postgrestVersion) {
-		out.push(`${pad(1)}__InternalUpstream: {`);
-		out.push(`${pad(2)}PostgrestVersion: ${lit(options.postgrestVersion)}`);
-		out.push(`${pad(1)}}`);
-	}
 	for (const name of schemaNames) {
 		const tables = byName(
 			schema.tables.filter((one) => schemaOf(one, defaultSchema) === name && one.kind !== 'view')
@@ -552,18 +539,18 @@ function constantsBlock(
 }
 
 /**
- * The helper types, verbatim from what `upstream gen types typescript` emits today, with the
- * default schema's NAME templated in.
+ * The helper types generated files for the v2 client API carry, verbatim, with the default
+ * schema's NAME templated in.
  *
  * Copied rather than reimplemented on purpose: this is the compatibility surface, and a
  * cleverer version of it that behaves a shade differently is exactly the kind of difference
- * that shows up in somebody's build and not in ours. `DatabaseWithoutInternals` is emitted even
- * when `__InternalUpstream` is not, because `Omit` of an absent key is a no-op and one shape is
- * worth more than a conditional.
+ * that shows up in somebody's build and not in ours. `DatabaseWithoutInternals` is kept as a
+ * name, the whole of `Database`, because the helpers below refer to it and so may a customer's
+ * own code.
  */
 function helperBlock(defaultSchema: string): string {
 	const s = lit(defaultSchema);
-	return `type DatabaseWithoutInternals = Omit<Database, "__InternalUpstream">
+	return `type DatabaseWithoutInternals = Database
 
 type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, ${s}>]
 

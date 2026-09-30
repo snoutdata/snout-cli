@@ -1,7 +1,7 @@
 /**
  * `snoutdata tokens …` — the credential a cron job holds.
  *
- * `snoutdata login` writes a Upstream session, which lasts an hour. That is right for a
+ * `snoutdata login` writes a session, which lasts an hour. That is right for a
  * terminal and useless for CI, so this is the other half: a token that does not expire,
  * made once at a keyboard, pasted into a secret, and read from
  * `SNOUTDATA_ACCESS_TOKEN` by every command afterwards.

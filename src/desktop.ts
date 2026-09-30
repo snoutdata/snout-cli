@@ -16,7 +16,7 @@
  *
  * ## What is asked for, and what comes back
  *
- * NOT the app's session. The app holds a real Upstream session and is therefore allowed
+ * NOT the app's session. The app holds a real session and is therefore allowed
  * to mint (the control plane's standing rule is that a token cannot mint a token, and a
  * session is not a token). So it mints an `sdt_` named for this machine, which is
  * revocable with `snoutdata tokens revoke`, visible in `tokens list`, and lands on the

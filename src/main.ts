@@ -353,8 +353,7 @@ async function run(args: ParsedArgs): Promise<number> {
 					await functions.deploy(ref(), name, {
 						dir: flagString(args, 'dir'),
 						entrypoint: flagString(args, 'entrypoint'),
-						// `--no-verify-jwt` is the Upstream spelling, so somebody moving over
-						// types what they already type. Default ON: a function is arbitrary
+						// `--no-verify-jwt`, the usual spelling. Default ON: a function is arbitrary
 						// code with a network attached, and the cost of the wrong default is
 						// a stranger running it.
 						verifyJwt: !flagBoolean(args, 'no-verify-jwt')
@@ -564,8 +563,6 @@ async function run(args: ParsedArgs): Promise<number> {
 					.map((one) => one.trim())
 					.filter(Boolean),
 				out: flagString(args, 'out'),
-				// `--postgrest-version` is the 0.2.0 spelling, still accepted. See args.ts.
-				dataApiVersion: flagString(args, 'data-api-version') ?? flagString(args, 'postgrest-version'),
 				sql: local?.sql
 			});
 		}

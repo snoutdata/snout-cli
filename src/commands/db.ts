@@ -3,8 +3,7 @@
  *
  * The promise this file keeps is D12's: **being signed in is enough.** `db psql` fetches
  * the project's credentials, hands psql a URL, and never asks anybody for a password —
- * which is the difference between this and `upstream link`, and the whole reason the
- * connection function exists.
+ * which is the whole reason the connection function exists.
  *
  * The password reaches psql through `PGPASSWORD` in the child's environment, never on a
  * command line, because argv is readable by every process on the box through /proc.
@@ -207,7 +206,6 @@ export async function exportDatabase(
 	// not have -- and because pg_dump packs an object's WHOLE acl into one entry, that
 	// takes every other grant on the object with it. It reports a "role does not exist"
 	// nobody reads as fatal, and the database comes up with no privileges on anything.
-	// Upstream ships roles as their own file and restores it first for the same reason.
 	//
 	// Absent on an export taken before this shipped, and on a control plane that has not
 	// applied 060 yet, so it is written only when it is there: an old export still

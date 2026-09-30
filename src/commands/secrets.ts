@@ -1,8 +1,7 @@
 /**
  * `snoutdata secrets …` — the environment a project's functions run with.
  *
- * `docs/cloud/STACK.md` Phase H. Every function in a project gets every secret, which is
- * what Upstream does and what somebody moving from it expects.
+ * `docs/cloud/STACK.md` Phase H. Every function in a project gets every secret.
  *
  * ## Nothing here ever prints a value, and that is the feature
  *

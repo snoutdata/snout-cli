@@ -8,10 +8,8 @@
  *
  * ## Where a function is read from
  *
- * `functions/<name>/`, and `--dir` overrides it. `upstream/functions/<name>/` is also
- * accepted, silently, so a project laid out the Upstream CLI's way deploys unchanged; it is
- * deliberately never named in help, errors or docs (Joel, 2026-09-23: the product does not
- * talk about Upstream).
+ * `functions/<name>/`, and `--dir` overrides it (a project laid out another way points it at
+ * its own folder).
  *
  * ## What is refused, and why it is refused HERE as well as there
  *
@@ -76,8 +74,8 @@ export interface SizeOptions {
 	reset?: boolean;
 }
 
-/** Where a function called `<name>` is looked for, in order. Only the first is ever named. */
-const LAYOUTS = ['functions', 'upstream/functions'];
+/** Where a function called `<name>` is looked for. */
+const LAYOUTS = ['functions'];
 
 async function isDirectory(path: string): Promise<boolean> {
 	try {
@@ -156,7 +154,7 @@ export interface DeployOptions {
 /**
  * What a function's bundle holds: its own folder, and `../_shared` when there is one.
  *
- * `upstream/functions/_shared` is Upstream's convention for code every function imports as
+ * `functions/_shared` is the usual folder for code every function imports as
  * `../_shared/…`, and until 2026-09-15 this shipped only the function's own folder, so such an
  * import deployed fine and failed at the first request. When the sibling exists the bundle is laid
  * out the way that import assumes, `<name>/…` beside `_shared/…` with the entrypoint under

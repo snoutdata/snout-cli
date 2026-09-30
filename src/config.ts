@@ -25,7 +25,7 @@ import { dirname, join, parse, resolve } from 'node:path';
 export interface StoredAuth {
 	readonly accessToken: string;
 	readonly refreshToken?: string;
-	/** Seconds since the epoch, as Upstream reports it. */
+	/** Seconds since the epoch, as the auth server reports it. */
 	readonly expiresAt?: number;
 	readonly email?: string;
 }

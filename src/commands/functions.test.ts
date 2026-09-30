@@ -30,7 +30,7 @@ test('the CLI refuses the names the platform sets, before the first request', ()
 	// Checked here as well as on the server, so somebody setting four secrets and getting
 	// it wrong on the third is told before two of them are already stored.
 	assert.equal(checkSecretName('STRIPE_KEY'), null);
-	assert.ok(checkSecretName('UPSTREAM_URL'));
+	assert.ok(checkSecretName('SNOUTDATA_URL'));
 	assert.ok(checkSecretName('SNOUT_ANYTHING'));
 	assert.ok(checkSecretName('2FA'));
 	assert.ok(checkSecretName('has-a-hyphen'));
