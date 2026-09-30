@@ -16,7 +16,7 @@ import { climb } from './ladder.js';
 
 export const ACCOUNTS_URL = process.env.SNOUTDATA_ACCOUNTS_URL ?? 'https://accounts.snoutdata.com';
 export const ANON_KEY =
-	process.env.SNOUTDATA_ANON_KEY ?? 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpmN2c2NW1iOGZhcmEiLCJyb2xlIjoiYW5vbiIsImlhdCI6MTc4OTUxNTUyNCwiZXhwIjoyMTA0ODc1NTI0fQ.TiFJbsmmELR8FIje8lbg-95UJFtoj7IwmC2PZtWPAk8';
+	process.env.SNOUTDATA_ANON_KEY ?? 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzbm91dGRhdGEiLCJyZWYiOiJ6ZjdnNjVtYjhmYXJhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4MDcwNDcsImV4cCI6MjEwNDg3NTUyNH0.M-Cb0wFEhJXU21cXtQxZAn-WnRcq4rK2uNSkeHdLucY';
 export const FUNCTIONS = `${ACCOUNTS_URL}/functions/v1`;
 
 export class ApiError extends Error {
