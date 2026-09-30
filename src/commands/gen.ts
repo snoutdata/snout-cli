@@ -2,8 +2,7 @@
  * `snoutdata gen types typescript` — the schema, as a `.ts` file, on stdout.
  *
  * The companion to `snoutdata start`: the two commands a developer working against a hosted
- * Postgres actually reaches for. `upstream gen types` needs a `pg-meta` container to
- * answer the same question; this needs `psql` and one query, because the thing that turns a
+ * Postgres actually reaches for. It needs `psql` and one query, because the thing that turns a
  * schema into TypeScript is ours (`docs/cloud/STACK.md` S12) and lives in
  * `src/shared/typescriptTypes.ts`, copied from the desktop app's `shared/` where it is the
  * canonical file and is tested.
@@ -52,8 +51,6 @@ export interface GenOptions extends GenTarget {
 	readonly defaultSchema?: string;
 	/** Write here instead of stdout. */
 	readonly out?: string;
-	/** Declare this data-API version in the generated types' internals block. Off by default. */
-	readonly dataApiVersion?: string;
 	/**
 	 * How SQL reaches the database, when the caller has a better way than the psql on PATH.
 	 *
@@ -428,8 +425,7 @@ export async function generateTypes(options: GenOptions): Promise<GenResult> {
 	const types = emitTypeScriptTypes(schema, {
 		driverId: 'postgres',
 		defaultSchema: options.defaultSchema ?? schemas[0] ?? 'public',
-		enums,
-		postgrestVersion: options.dataApiVersion
+		enums
 	});
 
 	let path: string | null = null;

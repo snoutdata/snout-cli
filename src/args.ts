@@ -56,13 +56,11 @@ const VALUED = new Set([
 	// `gen types --db-url`: a database the control plane has never heard of, which is what
 	// makes the emitter useful against a local pod or somebody else's Postgres.
 	'db-url',
-	// `gen types --data-api-version`: the data-API version declared in the generated types'
-	// internals block, which a client library's TypeScript helpers read.
+	// `gen types --data-api-version` (and its 0.2.0 spelling, `--postgrest-version`): accepted
+	// and ignored since the generated types stopped carrying an internals block (2026-09-30). A
+	// published flag that starts erroring on an upgrade breaks somebody's script for the sake of
+	// a word. Drop both at the next major.
 	'data-api-version',
-	// What that flag was called in 0.2.0, when it was named after the server behind the data
-	// API rather than after the thing a caller is describing. Still accepted and no longer
-	// documented: a published flag that starts erroring on an upgrade breaks somebody's script
-	// for the sake of a word. Drop it at the next major.
 	'postgrest-version',
 	// `start --port`: where the local database publishes.
 	'port',
@@ -147,8 +145,8 @@ const KNOWN_BOOLEANS = new Set([
 	'help',
 	'version',
 	'force',
-	// `functions deploy --no-verify-jwt`: the webhook case. The Upstream spelling, so
-	// somebody moving over types what they already type. It makes the URL callable by
+	// `functions deploy --no-verify-jwt`: the webhook case, spelled the way functions CLIs
+	// usually spell it. It makes the URL callable by
 	// anybody who knows it, which is why the deploy prints what it did in words afterwards.
 	'no-verify-jwt',
 	// `functions size <name> --reset`: back to the plan's default size.

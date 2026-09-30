@@ -17,7 +17,7 @@
  * plane hands the token over exactly once.
  */
 
-import { UPSTREAM_URL, APP_KEY } from './api.js';
+import { ACCOUNTS_URL, APP_KEY } from './api.js';
 import { fail } from './failure.js';
 
 export interface DeviceStart {
@@ -35,7 +35,7 @@ export type DevicePoll =
 	| { status: 'denied' | 'used' | 'expired'; error?: string };
 
 async function post<T>(fn: string, body: unknown): Promise<{ status: number; body: T }> {
-	const response = await fetch(`${UPSTREAM_URL}/v1/fn/${fn}`, {
+	const response = await fetch(`${ACCOUNTS_URL}/v1/fn/${fn}`, {
 		method: 'POST',
 		headers: { apikey: APP_KEY, 'Content-Type': 'application/json' },
 		body: JSON.stringify(body)
