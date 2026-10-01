@@ -122,7 +122,7 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata db restore --at TIME [--name N]    that moment, into a NEW project beside this one
 
   snoutdata mcp [--allow-delete]           serve these operations to an agent, over stdio
-                                           (plus the SnoutData app's own tools, when it is
+                                           (plus SnoutData Studio's own tools, when it is
                                             running here; SNOUTDATA_NO_DESKTOP opts out)
 
 Every command takes --json, --quiet and --help, and anything that waits takes --timeout
@@ -130,7 +130,7 @@ SECONDS. A failure in --json mode is {"ok":false,"code","error"} on stdout, and 
 code says the same thing more coarsely: 2 the command was wrong, 3 the credential, 4 not
 ready yet, 5 forbidden, 6 not found, 7 conflict, 8 quota, 9 network, 10 timed out.
 
-With no credential and a person present, sign-in is offered: the SnoutData app if it is
+With no credential and a person present, sign-in is offered: SnoutData Studio if it is
 running here, then a pairing code. With no person (not a terminal, --json, CI, or
 SNOUTDATA_NO_INTERACTIVE) nothing is asked and it exits 3 at once.
 

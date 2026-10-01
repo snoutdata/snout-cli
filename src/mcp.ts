@@ -633,7 +633,7 @@ async function callTool(
 				// secret. Borrowing is the only shape that keeps that true.
 				if (options.borrowed?.some((tool) => tool.name === name)) {
 					if (!operations.callBorrowed) {
-						return said(id, `${name} needs the SnoutData app, which is no longer answering.`, true);
+						return said(id, `${name} needs SnoutData Studio, which is no longer answering.`, true);
 					}
 					return ok(id, await operations.callBorrowed(name, args));
 				}
