@@ -269,7 +269,7 @@ test('create_token warns that the token is shown once', async () => {
 
 const BORROWED_TOOL = {
 	name: 'app_run_query',
-	description: '[SnoutData app, on this machine] Run a read-only query',
+	description: '[SnoutData Studio, on this machine] Run a read-only query',
 	inputSchema: { type: 'object' as const, properties: {}, required: [] as string[] }
 };
 

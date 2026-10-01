@@ -61,19 +61,19 @@ async function fromDesktop(): Promise<StoredAuth | null> {
 		// Two of these are the user having switched something off, and saying so once is
 		// worth it: otherwise the feature looks broken rather than disabled.
 		if (look.skip === 'handoff-disabled' || look.skip === 'server-disabled') {
-			say(dim('The SnoutData app is running but is not set to hand out sign-ins.'));
+			say(dim('SnoutData Studio is running but is not set to hand out sign-ins.'));
 		}
 		return null;
 	}
 	const who = look.who.email ?? 'the signed-in account';
 	say('');
-	say(`The SnoutData app is open here, signed in as ${bold(who)}.`);
+	say(`SnoutData Studio is open here, signed in as ${bold(who)}.`);
 	say(dim('It can create an access token for this terminal. Your sign-in itself is not handed over,'));
 	say(dim('and you can revoke the token later with `snoutdata tokens revoke`.'));
 	if (!(await confirm('Use it?'))) {
 		return null;
 	}
-	say('Asking the app. Approve it there.');
+	say('Asking SnoutData Studio. Approve it there.');
 	const minted = await desktop.mint(look.config, process.argv.slice(2).join(' ').slice(0, 60) || 'snoutdata');
 	if ('declined' in minted) {
 		say(`The app did not create a token: ${minted.reason}`);

@@ -155,7 +155,7 @@ async function borrow(): Promise<{ tools: ToolDefinition[]; config: desktop.Desk
 			// (the databases configured in the app on this machine) should not have to infer
 			// which is which from a description.
 			name: `${BORROWED}${tool.name}`,
-			description: `[SnoutData app, on this machine] ${tool.description ?? tool.name}`,
+			description: `[SnoutData Studio, on this machine] ${tool.description ?? tool.name}`,
 			inputSchema: (tool.inputSchema ?? { type: 'object', properties: {} }) as ToolDefinition['inputSchema']
 		}));
 		return { tools, config };
@@ -177,8 +177,8 @@ export async function serve(options: Omit<McpOptions, 'version'> & { version: st
 	const served: McpOptions = { ...options, borrowed };
 	warn(
 		borrowed.length > 0
-			? `snoutdata mcp: ${TOOLS.length} cloud tools, and ${borrowed.length} borrowed from the SnoutData app on this machine.`
-			: 'snoutdata mcp: cloud tools only. The SnoutData app is not answering here, so its database tools are not on this endpoint.'
+			? `snoutdata mcp: ${TOOLS.length} cloud tools, and ${borrowed.length} borrowed from SnoutData Studio on this machine.`
+			: 'snoutdata mcp: cloud tools only. SnoutData Studio is not answering here, so its database tools are not on this endpoint.'
 	);
 	let rest = '';
 

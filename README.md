@@ -75,7 +75,7 @@ being handed a connection string. Anything destructive is off unless you pass `-
 and it is present-but-refusing rather than absent, so an agent can tell you what to turn on
 instead of inventing something else.
 
-If the SnoutData desktop app is running on the same machine, its own database tools are borrowed
+If SnoutData Studio is running on the same machine, its own database tools are borrowed
 onto the same endpoint under an `app_` prefix, so one configured server covers both the cloud and
 the databases already set up locally. `SNOUTDATA_NO_DESKTOP=1` opts out.
 
@@ -177,8 +177,8 @@ this folder or a parent.
 
 **A token**, in order: `SNOUTDATA_ACCESS_TOKEN`, then `~/.snoutdata/auth.json`.
 
-**Sign-in, when there is no credential and a person is present**, in order: the SnoutData
-desktop app if it is running here and willing, then a browser, then a pairing code for a
+**Sign-in, when there is no credential and a person is present**, in order: SnoutData
+Studio if it is running here and willing, then a browser, then a pairing code for a
 terminal that has no browser at all. With no person present (not a terminal, `--json`, CI, or
 `SNOUTDATA_NO_INTERACTIVE`) nothing is asked and it exits 3 at once.
 

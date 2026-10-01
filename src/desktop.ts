@@ -76,7 +76,7 @@ function userDataDir(app: string, platform: NodeJS.Platform, env: NodeJS.Process
 }
 
 /**
- * Every place a SnoutData app could have left its config, best first.
+ * Every place SnoutData Studio could have left its config, best first.
  *
  * **There are two, and missing the second is a bug this had.** `src/main/index.ts` appends
  * `-dev` to userData when it is not packaged, so a developer running the app from source
@@ -257,7 +257,7 @@ export async function mint(config: DesktopConfig, command: string): Promise<{ to
 	if (response.ok && body.ok && body.token) {
 		return { token: body.token, name: body.name ?? 'SnoutData CLI' };
 	}
-	return { declined: true, reason: body.error ?? `the app refused (${response.status})` };
+	return { declined: true, reason: body.error ?? `SnoutData Studio refused (${response.status})` };
 }
 
 /** This machine, as the prompt should name it. */
@@ -299,7 +299,7 @@ async function rpc(config: DesktopConfig, method: string, params: unknown, timeo
 	}
 	const body = (await response.json()) as { result?: unknown; error?: { message?: string } };
 	if (body.error) {
-		throw new Error(body.error.message ?? 'the app refused');
+		throw new Error(body.error.message ?? 'SnoutData Studio refused');
 	}
 	return body.result;
 }
