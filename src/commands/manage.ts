@@ -90,7 +90,16 @@ export async function productsCommand(ref: string): Promise<void> {
 			line('data-api', dataApi, 'allowedOnPlan' in dataApi && !dataApi.allowedOnPlan ? 'paid plans only' : ''),
 			line('push', answer.push, 'scheduling' in answer.push && answer.push.enabled && !answer.push.scheduling ? 'scheduled sends on paid plans' : ''),
 		])}\n`);
-		say(dim(`  snoutdata products enable storage --ref ${ref}`));
+		// The hint names a product that is actually OFF, or nothing: it used to say "enable
+		// storage" on a project where all four were already on.
+		const isOff = (value: unknown): boolean =>
+			Boolean(value && typeof value === 'object' && 'enabled' in value && !(value as { enabled: boolean }).enabled);
+		const off = (['auth', 'storage', 'data-api', 'push'] as const).find((name) =>
+			isOff(name === 'data-api' ? dataApi : answer[name])
+		);
+		if (off) {
+			say(dim(`  snoutdata products enable ${off} --ref ${ref}`));
+		}
 	});
 }
 
