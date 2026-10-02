@@ -22,12 +22,17 @@
  * **It runs through `psql`, for the same reason `db push` does.** The published CLI has no
  * dependencies at all, which is most of why `npx snoutdata` is fast; adding `pg` to it to run
  * one read-only query would be a poor trade. The error when psql is missing says so plainly.
+ *
+ * **Except for a hosted project, which does not need it.** The query is one read that answers one
+ * JSON value, which is exactly what `cloud-project-sql` (the dashboard's SQL editor) carries, with
+ * the same token. So with no psql on the machine a `--ref` asks the control plane instead
+ * (2026-10-02: on Windows, where psql is rarely installed, `gen types --ref` could not run at all).
  */
 
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
-import { connection, type Connection } from '../api.js';
+import { call, connection, type Connection } from '../api.js';
 import { fail } from '../failure.js';
 import { emit, say } from '../output.js';
 import type { ColumnInfo, DatabaseSchema, RoutineInfo, TableInfo } from '../shared/schema.js';
@@ -403,7 +408,10 @@ export async function generateTypes(options: GenOptions): Promise<GenResult> {
 	const target = options.dbUrl ? targetFromUrl(options.dbUrl) : fromConnection(await connection(refOf(options)));
 
 	const introspect = INTROSPECT.replace('$SCHEMAS$', arrayLiteral(schemas));
-	const result = await (options.sql ? options.sql(introspect) : runPsql(target, introspect));
+	let result = await (options.sql ? options.sql(introspect) : runPsql(target, introspect));
+	if (result.code === 127 && !options.sql && !options.dbUrl && options.ref) {
+		result = await viaControlPlane(options.ref, introspect);
+	}
 	if (result.code === 127) {
 		fail('tool-missing', result.err.trim());
 	}
@@ -443,6 +451,32 @@ export async function generateTypes(options: GenOptions): Promise<GenResult> {
 		path,
 		types
 	};
+}
+
+/**
+ * The introspection query through the control plane's SQL function, answered the way psql would:
+ * the one JSON value on stdout. That function returns a single-column row whose JSON it has
+ * already turned into text.
+ */
+export async function viaControlPlane(
+	ref: string,
+	sql: string,
+	send: (fn: string, body: unknown) => Promise<unknown> = call
+): Promise<{ code: number; out: string; err: string }> {
+	try {
+		const answer = (await send('cloud-project-sql', { ref, sql })) as {
+			rows?: Record<string, unknown>[];
+			error?: string;
+		};
+		if (answer.error) {
+			return { code: 1, out: '', err: answer.error };
+		}
+		const value = Object.values(answer.rows?.[0] ?? {})[0];
+		const out = typeof value === 'string' ? value : value === undefined || value === null ? '' : JSON.stringify(value);
+		return { code: 0, out, err: '' };
+	} catch (error) {
+		return { code: 1, out: '', err: error instanceof Error ? error.message : String(error) };
+	}
 }
 
 function refOf(options: GenOptions): string {

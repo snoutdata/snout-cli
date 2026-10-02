@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { arrayLiteral, targetFromUrl, toSchema } from './gen.js';
+import { arrayLiteral, targetFromUrl, toSchema, viaControlPlane } from './gen.js';
 
 /**
  * The half of `gen types` that decides, proven without a database.
@@ -124,5 +124,22 @@ describe('toSchema', () => {
 		assert.deepEqual(schema.tables[0]!.primaryKey, []);
 		assert.deepEqual(schema.tables[0]!.foreignKeys, []);
 		assert.deepEqual(schema.tables[0]!.indexes, []);
+	});
+});
+
+describe('viaControlPlane', () => {
+	test('answers like psql: the one JSON value, from the one row of the SQL function', async () => {
+		const sent: unknown[] = [];
+		const result = await viaControlPlane('j40q3yyej14jn', 'select 1', async (fn, body) => {
+			sent.push([fn, body]);
+			return { rows: [{ json_build_object: '{"tables":[]}' }], columns: ['json_build_object'] };
+		});
+		assert.deepEqual(result, { code: 0, out: '{"tables":[]}', err: '' });
+		assert.deepEqual(sent, [['cloud-project-sql', { ref: 'j40q3yyej14jn', sql: 'select 1' }]]);
+	});
+
+	test('a refusal is a failure with its sentence, never an empty schema', async () => {
+		const result = await viaControlPlane('j40q3yyej14jn', 'select 1', async () => ({ error: 'This project is paused' }));
+		assert.deepEqual(result, { code: 1, out: '', err: 'This project is paused' });
 	});
 });
