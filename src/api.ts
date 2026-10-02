@@ -14,6 +14,9 @@ import { isExpired, readAuth, writeAuth, type StoredAuth } from './config.js';
 import { explainNoHuman, noHumanReason } from './interactive.js';
 import { climb } from './ladder.js';
 
+declare const __SNOUTDATA_VERSION__: string | undefined;
+const CLIENT_INFO = `snoutdata-cli/${typeof __SNOUTDATA_VERSION__ === 'string' ? __SNOUTDATA_VERSION__ : 'dev'}`;
+
 export const ACCOUNTS_URL = process.env.SNOUTDATA_ACCOUNTS_URL ?? 'https://accounts.snoutdata.com';
 export const ANON_KEY =
 	process.env.SNOUTDATA_ANON_KEY ?? 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzbm91dGRhdGEiLCJyZWYiOiJ6ZjdnNjVtYjhmYXJhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4MDcwNDcsImV4cCI6MjEwNDg3NTUyNH0.M-Cb0wFEhJXU21cXtQxZAn-WnRcq4rK2uNSkeHdLucY';
@@ -171,7 +174,11 @@ export async function call<T>(
 		headers: {
 			Authorization: `Bearer ${token}`,
 			apikey: ANON_KEY,
-			'Content-Type': 'application/json'
+			'Content-Type': 'application/json',
+			// Who the audit log says did it. A signed-in CLI holds the same session JWT a browser
+			// does, so without this everything it did read "You" and the log's CLI filter only
+			// ever found access tokens. Attribution, never authority: the JWT decides that.
+			'x-client-info': CLIENT_INFO
 		},
 		body: method === 'GET' ? undefined : JSON.stringify(body)
 	});
