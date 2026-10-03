@@ -183,6 +183,30 @@ describe('runStart', () => {
 		}
 	});
 
+	// docs/cloud/PG18.md G4: the image is the major the project's volume was made on, so the
+	// folder's project must reach the image check, and a folder with none asks for a new one's.
+	test("the image is asked for by the folder's project, or for a new one when there is none", async () => {
+		const cwd = scratch();
+		try {
+			const asked: Array<string | null> = [];
+			const first = pods({
+				ensureImage: async (ref) => {
+					asked.push(ref);
+					return null;
+				},
+				ready: async (ref) => {
+					asked.push(ref);
+					return null;
+				}
+			});
+			const one = await runStart(first.it, { cwd });
+			await runStart(first.it, { cwd });
+			assert.deepEqual(asked, [null, null, one.status.ref, one.status.ref]);
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
 	test('a machine that cannot run one is refused, and NOTHING is written', async () => {
 		const cwd = scratch();
 		try {
