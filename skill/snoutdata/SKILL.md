@@ -5,7 +5,7 @@ description: Create and manage SnoutData Cloud projects, each a hosted Postgres 
 
 # SnoutData Cloud, through the `snoutdata` CLI
 
-A SnoutData Cloud project is a backend: a Postgres 17 database (with `pgvector`) plus auth, storage, a REST and GraphQL data
+A SnoutData Cloud project is a backend: a Postgres 18 database (with `pgvector`) plus auth, storage, a REST and GraphQL data
 API and Snout Functions in front of it. `@snoutdata/client` is the JavaScript client for all of it.
 Everything is driven by one CLI. Nothing needs installing: every command below can be run as
 `npx snoutdata ...`.
@@ -90,4 +90,4 @@ read-only (check `usage`).
 
 ## Full reference
 
-Every command, flag and output shape: https://docs.snoutdata.com/cloud/agent.md
+Every command, flag and output shape: https://docs.snoutdata.com/developers/agent.md

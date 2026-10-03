@@ -143,7 +143,7 @@ A project comes from --ref, then SNOUTDATA_PROJECT, then
 SNOUTDATA_ACCESS_TOKEN, then ~/.snoutdata/auth.json. The session that login writes lasts
 an hour, so CI wants "tokens create", which does not expire.
 
-Docs: https://docs.snoutdata.com/cloud/cli
+Docs: https://docs.snoutdata.com/developers/cli
 Examples: https://github.com/snoutdata/snoutdata (a star helps other people find it)
 Source: https://github.com/snoutdata/snout-cli
 `;
