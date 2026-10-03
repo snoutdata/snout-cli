@@ -84,7 +84,7 @@ function fromConnection(details: Connection): Target {
 		database: details.database,
 		user: details.user,
 		password: details.password,
-		sslMode: 'require',
+		sslMode: details.ssl === 'disable' ? 'disable' : 'require',
 		label: details.ref
 	};
 }
@@ -198,7 +198,8 @@ select json_build_object(
           'nullable', not a.attnotnull,
           'isPrimaryKey', false,
           'default', pg_get_expr(d.adbin, d.adrelid),
-          'autoIncrement', a.attidentity <> '' or coalesce(pg_get_expr(d.adbin, d.adrelid), '') like 'nextval(%'
+          'autoIncrement', a.attidentity <> '' or coalesce(pg_get_expr(d.adbin, d.adrelid), '') like 'nextval(%',
+          'generatedAlways', a.attidentity = 'a' or a.attgenerated <> ''
         ) order by a.attnum)
         from pg_attribute a
         left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
@@ -306,6 +307,7 @@ interface RawIntrospection {
 			nullable: boolean;
 			default: string | null;
 			autoIncrement: boolean;
+			generatedAlways?: boolean;
 		}>;
 		primaryKey: string[] | null;
 		foreignKeys: Array<{
@@ -345,7 +347,8 @@ export function toSchema(raw: RawIntrospection, database: string, now = 0): {
 			nullable: column.nullable,
 			isPrimaryKey: keyed.has(column.name),
 			default: column.default,
-			autoIncrement: column.autoIncrement
+			autoIncrement: column.autoIncrement,
+			...(column.generatedAlways === true ? { generatedAlways: true } : {})
 		}));
 		return {
 			name: table.name,

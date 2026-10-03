@@ -33,6 +33,8 @@ export interface StoredAuth {
 export interface LinkedProject {
 	readonly ref: string;
 	readonly name?: string;
+	/** A local project: the stack folder its `.env` is read from (`local.ts`). Absent for a cloud one. */
+	readonly local?: string;
 }
 
 export function authPath(home = homedir()): string {
@@ -87,7 +89,7 @@ export function linkPath(directory: string): string {
 }
 
 /** Walk up from `from` looking for a link, the way git looks for `.git`. */
-export function findLink(from: string): { ref: string; directory: string } | null {
+export function findLink(from: string): { ref: string; directory: string; local?: string } | null {
 	let directory = resolve(from);
 	const root = parse(directory).root;
 	for (;;) {
@@ -96,7 +98,9 @@ export function findLink(from: string): { ref: string; directory: string } | nul
 			try {
 				const parsed = JSON.parse(readFileSync(path, 'utf8')) as LinkedProject;
 				if (typeof parsed.ref === 'string' && parsed.ref) {
-					return { ref: parsed.ref, directory };
+					return typeof parsed.local === 'string' && parsed.local
+						? { ref: parsed.ref, directory, local: parsed.local }
+						: { ref: parsed.ref, directory };
 				}
 			} catch {
 				// Ignore and keep walking: a broken file in a parent must not stop a

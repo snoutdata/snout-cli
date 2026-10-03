@@ -16,7 +16,9 @@
 
 import { parseArgs, flagBoolean, flagNumber, flagString, UsageError, type ParsedArgs } from './args.js';
 import { COMMANDS } from './catalogue.js';
-import { ApiError, NotSignedIn, whoami } from './api.js';
+import { ApiError, NotSignedIn, localStack, whoami } from './api.js';
+import { stackShow, stackStart, stackStatus, stackStop } from './commands/stack.js';
+import { localDeploy, localList, localRemove, localSecretsList, localSecretsSet, localSecretsUnset } from './commands/stackFunctions.js';
 import { CliFailure, EXIT, codeForStatus, codeForThrown } from './failure.js';
 import { canAsk, interactiveState, setInteractive } from './interactive.js';
 import { clearAuth, resolveRef, writeAuth, writeLink } from './config.js';
@@ -37,6 +39,7 @@ import * as notifications from './commands/notifications.js';
 import { genTypes } from './commands/gen.js';
 import { livePods, localSql, start, status as localStatus, stop } from './commands/local.js';
 import { serve as serveMcp } from './commands/mcp.js';
+import { findStack, type LocalStack } from './local.js';
 import { usage } from './commands/usage.js';
 
 // Injected by build.mjs from package.json, because a hand-maintained copy of the version
@@ -67,6 +70,7 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata projects create --name X [--region R] [--no-wait]
   snoutdata projects pause|resume|delete [--ref R]
   snoutdata link --ref R                   write .snoutdata/project.json here
+  snoutdata link --local [NAME|FOLDER]     use a local project (Studio's, or a snout-stack folder) here
 
   snoutdata projects show [--ref R]        one project: state, products, functions, domains
 
@@ -201,6 +205,12 @@ async function run(args: ParsedArgs): Promise<number> {
 			);
 		}
 		return found;
+	};
+	// The local project linked here (or named by --ref), when it is one: start, stop, status and
+	// projects show then act on its stack in Docker instead of the cloud or a `start` pod.
+	const linkedStack = () => {
+		const found = resolveRef({ flag: flagString(args, 'ref') });
+		return found ? localStack(found) : null;
 	};
 
 	switch (group) {
@@ -337,13 +347,40 @@ async function run(args: ParsedArgs): Promise<number> {
 					await projects.action(action, flagString(args, 'ref') ?? rest[0] ?? ref());
 					return 0;
 				case 'show':
-					await manage.showCommand(flagString(args, 'ref') ?? rest[0] ?? ref());
+					{
+						const shown = flagString(args, 'ref') ?? rest[0] ?? ref();
+						const stack = localStack(shown);
+						if (stack) {
+							stackShow(stack);
+						} else {
+							await manage.showCommand(shown);
+						}
+					}
 					return 0;
 				default:
 					throw new UsageError(`unknown command: projects ${action}`);
 			}
 		}
 		case 'functions': {
+			const local = linkedStack();
+			if (local) {
+				// A local project's functions are folders in its stack (stackFunctions.ts).
+				if (action === 'deploy') {
+					if (!rest[0]) {
+						throw new UsageError('functions deploy needs a name: snoutdata functions deploy <name>');
+					}
+					await localDeploy(local, rest[0], { dir: flagString(args, 'dir'), verifyJwt: !flagBoolean(args, 'no-verify-jwt') });
+					return 0;
+				}
+				if (action === undefined || action === 'list') {
+					localList(local);
+					return 0;
+				}
+				if ((action === 'delete' || action === 'remove') && rest[0]) {
+					await localRemove(local, rest[0]);
+					return 0;
+				}
+			}
 			switch (action) {
 				case 'deploy': {
 					const name = rest[0];
@@ -390,6 +427,21 @@ async function run(args: ParsedArgs): Promise<number> {
 			}
 		}
 		case 'secrets': {
+			const local = linkedStack();
+			if (local) {
+				if (action === 'set') {
+					await localSecretsSet(local, await secrets.pairsFrom(rest, { stdin: flagBoolean(args, 'stdin') }));
+					return 0;
+				}
+				if (action === undefined || action === 'list') {
+					localSecretsList(local);
+					return 0;
+				}
+				if ((action === 'unset' || action === 'remove') && rest[0]) {
+					await localSecretsUnset(local, rest[0]);
+					return 0;
+				}
+			}
 			switch (action) {
 				case 'set':
 					await secrets.set(ref(), rest, { stdin: flagBoolean(args, 'stdin') });
@@ -486,6 +538,21 @@ async function run(args: ParsedArgs): Promise<number> {
 			return 0;
 		}
 		case 'link': {
+			if (flagBoolean(args, 'local')) {
+				// A stack on this machine (local.ts): by Studio's name or ref, or by its folder.
+				let stack: LocalStack;
+				try {
+					stack = findStack(action);
+				} catch (e) {
+					throw new CliFailure('not-found', e instanceof Error ? e.message : String(e));
+				}
+				const path = writeLink(process.cwd(), { ref: stack.ref, ...(stack.name ? { name: stack.name } : {}), local: stack.folder });
+				emit({ ref: stack.ref, local: stack.folder, api: stack.apiUrl, path }, () => {
+					say(`Linked ${stack.name ?? stack.ref}, the local project in ${stack.folder} (${path}).`);
+					say(`Its API is ${stack.apiUrl}; its database is on 127.0.0.1:${stack.dbPort}.`);
+				});
+				return 0;
+			}
 			const target = flagString(args, 'ref') ?? action;
 			if (!target) {
 				throw new UsageError('link needs --ref');
@@ -566,17 +633,26 @@ async function run(args: ParsedArgs): Promise<number> {
 				sql: local?.sql
 			});
 		}
-		case 'start':
+		case 'start': {
+			const stack = linkedStack();
+			if (stack) {
+				return stackStart(stack);
+			}
+		}
 			return start(await livePods(), {
 				port: flagNumber(args, 'port'),
 				dir: flagString(args, 'dir'),
 				noMigrations: flagBoolean(args, 'no-migrations'),
 				outOfOrder: flagBoolean(args, 'out-of-order')
 			});
-		case 'stop':
-			return stop(await livePods());
-		case 'status':
-			return localStatus(await livePods());
+		case 'stop': {
+			const stack = linkedStack();
+			return stack ? stackStop(stack) : stop(await livePods());
+		}
+		case 'status': {
+			const stack = linkedStack();
+			return stack ? stackStatus(stack) : localStatus(await livePods());
+		}
 		case 'usage':
 			return usage(ref(), {
 				days: flagNumber(args, 'days'),
@@ -602,6 +678,12 @@ async function init(args: ParsedArgs): Promise<number> {
 	const existing = resolveRef({ flag: flagString(args, 'ref') });
 	if (existing) {
 		say(`This folder is already linked to ${existing}.`);
+		if (flagBoolean(args, 'env')) {
+			// Linked already is the usual way to arrive here with --env: `init` first, then
+			// wanting the .env. It used to print the URL and leave the file as it was.
+			await writeEnvFor(existing);
+			return 0;
+		}
 		await db.url(existing);
 		return 0;
 	}
@@ -617,12 +699,19 @@ async function init(args: ParsedArgs): Promise<number> {
 
 	const ref = resolveRef({ cwd: process.cwd() });
 	if (ref && flagBoolean(args, 'env')) {
-		const { connection } = await import('./api.js');
-		const details = await connection(ref);
-		const written = db.writeEnv(process.cwd(), details.uri);
-		say(`${written.replaced ? 'Updated' : 'Wrote'} DATABASE_URL in ${written.path}.`);
+		await writeEnvFor(ref);
 	}
 	return 0;
+}
+
+async function writeEnvFor(ref: string): Promise<void> {
+	const { connection } = await import('./api.js');
+	const details = await connection(ref);
+	const written = db.writeEnv(process.cwd(), details.uri);
+	say(`${written.replaced ? 'Updated' : 'Wrote'} DATABASE_URL in ${written.path}.`);
+	if (written.ignored) {
+		say('Added .env to .gitignore, since it holds the password.');
+	}
 }
 
 function basenameOf(directory: string): string {
