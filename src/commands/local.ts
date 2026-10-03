@@ -73,15 +73,19 @@ export interface LocalStatus {
  * against this interface, so the decisions are provable without it.
  */
 export interface LocalPods {
-	/** Null when this machine can run a local project; otherwise the sentence saying why not. */
-	ready(): Promise<string | null>;
+	/**
+	 * Null when this machine can run a local project; otherwise the sentence saying why not.
+	 * `ref` is the folder's project, or null when there is none yet: the image a project needs
+	 * is the major its volume was made on (docs/cloud/PG18.md, G4).
+	 */
+	ready(ref: string | null): Promise<string | null>;
 	/**
 	 * Make the database image exist on this machine, fetching it if it does not.
 	 *
 	 * Separate from {@link ready} because it can take minutes and has something to say while it
 	 * does. Null when the image is there; otherwise the sentence saying why it is not.
 	 */
-	ensureImage(onProgress: (message: string) => void): Promise<string | null>;
+	ensureImage(ref: string | null, onProgress: (message: string) => void): Promise<string | null>;
 	/** Make the egress-blocked network exist. Idempotent. */
 	prepare(): Promise<void>;
 	start(project: LocalProject, onProgress: (message: string) => void): Promise<LocalStatus>;
@@ -112,8 +116,9 @@ export interface LocalPods {
  * `snoutdata whoami`.
  */
 interface SnoutpodLocal {
-	podmanReady(imageAdvice?: string): Promise<string | null>;
-	ensureImage(onProgress?: (message: string) => void): Promise<string | null>;
+	podmanReady(imageAdvice?: string, image?: string): Promise<string | null>;
+	ensureImage(onProgress?: (message: string) => void, run?: undefined, image?: LocalImage): Promise<string | null>;
+	localImageFor(ref: string | null): Promise<LocalImage>;
 	ensureNetwork(): Promise<void>;
 	localRuntime(): unknown;
 	startLocal(pods: unknown, project: LocalProject, options: { onProgress: (m: string) => void }): Promise<LocalStatus>;
@@ -208,6 +213,22 @@ export function runtimeMissing(error: unknown): string {
 const IMAGE_ADVICE =
 	'It is fetched from ghcr.io/snoutdata/snoutpod-postgres on the first `snoutdata start`, so this usually means that registry could not be reached from here.';
 
+/** The image as `localImageFor` names it (`LocalImage` in `project.ts`). */
+interface LocalImage {
+	readonly name: string;
+	readonly published: string | null;
+	readonly major: number | null;
+}
+
+/** A project's image, or the sentence saying why its volume's major could not be read. */
+async function imageFor(mod: SnoutpodLocal, ref: string | null): Promise<LocalImage | string> {
+	try {
+		return await mod.localImageFor(ref);
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+}
+
 /** The live runtime, loaded only when a local command actually runs. */
 export async function livePods(): Promise<LocalPods> {
 	let mod: SnoutpodLocal;
@@ -222,8 +243,16 @@ export async function livePods(): Promise<LocalPods> {
 	// One runtime object per call, not per command: `localRuntime()` builds a small record of
 	// closures and holds no connection, so this costs nothing and keeps each call independent.
 	return {
-		ready: () => mod.podmanReady(IMAGE_ADVICE),
-		ensureImage: (onProgress) => mod.ensureImage(onProgress),
+		ready: async (ref) => {
+			const image = await imageFor(mod, ref);
+			// A read that failed is reported after anything podman itself is missing, which is
+			// usually why it failed.
+			return typeof image === 'string' ? ((await mod.podmanReady(IMAGE_ADVICE)) ?? image) : mod.podmanReady(IMAGE_ADVICE, image.name);
+		},
+		ensureImage: async (ref, onProgress) => {
+			const image = await imageFor(mod, ref);
+			return typeof image === 'string' ? image : mod.ensureImage(onProgress, undefined, image);
+		},
 		prepare: () => mod.ensureNetwork(),
 		start: (project, onProgress) => mod.startLocal(mod.localRuntime(), project, { onProgress }),
 		stop: (ref) => mod.stopLocal(mod.localRuntime(), ref),
@@ -324,12 +353,12 @@ export const DEFAULT_PORT = 54322;
  * package and a pull is the answer. What `ready()` is left to report is the things a pull
  * cannot fix, above all no podman at all.
  */
-async function preflight(pods: LocalPods): Promise<void> {
-	const noImage = await pods.ensureImage((message) => say(message));
+async function preflight(pods: LocalPods, ref: string | null): Promise<void> {
+	const noImage = await pods.ensureImage(ref, (message) => say(message));
 	if (noImage) {
 		fail('tool-missing', noImage);
 	}
-	const why = await pods.ready();
+	const why = await pods.ready(ref);
 	if (why) {
 		fail('tool-missing', why);
 	}
@@ -378,9 +407,9 @@ type SqlRunner = (sql: string) => Promise<{ code: number; out: string; err: stri
 
 export async function runStart(pods: LocalPods, options: StartOptions = {}): Promise<StartResult> {
 	const cwd = options.cwd ?? process.cwd();
-	await preflight(pods);
-
 	const existing = readLocal(cwd);
+	await preflight(pods, existing?.ref ?? null);
+
 	const project = existing ?? pods.mint(options.port ?? DEFAULT_PORT);
 	const created = existing ? null : writeLocal(cwd, project);
 
@@ -553,7 +582,7 @@ export async function stop(pods: LocalPods, options: { cwd?: string } = {}): Pro
 	if (!project) {
 		fail('not-found', 'there is no local database for this folder. `snoutdata start` makes one.');
 	}
-	await preflight(pods);
+	await preflight(pods, project.ref);
 	const status = await pods.stop(project.ref);
 	emit(status, () => say('Stopped. The data is still there; `snoutdata start` brings it back.'));
 	return 0;
@@ -570,7 +599,7 @@ export async function status(pods: LocalPods, options: { cwd?: string } = {}): P
 		);
 		return 0;
 	}
-	const why = await pods.ready();
+	const why = await pods.ready(project.ref);
 	if (why) {
 		emit({ exists: false, ref: project.ref, status: 'unknown', reason: why }, () => say(why));
 		return 0;
