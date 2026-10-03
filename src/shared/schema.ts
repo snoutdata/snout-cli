@@ -28,6 +28,10 @@ export interface ColumnInfo {
 	 *  IDENTITY` or a generated (computed) column. An insert or update that names it fails, so a
 	 *  generated type says `never` there. Absent means a value may be given. */
 	generatedAlways?: boolean;
+	/** A generated (computed) column's expression and how it is kept: `stored` is written on every
+	 *  insert/update, `virtual` (Postgres 18+) is computed on read. DDL must always spell the kind
+	 *  out, because Postgres 18 made VIRTUAL the default when it is left off. Postgres only. */
+	generatedAs?: { expression: string; kind: 'stored' | 'virtual' };
 	/** For document (MongoDB) collections: `true` when this column is a NESTED field projected from
 	 *  document structure — a dotted/bracketed path (`address.city`, `items[].sku`) rather than a
 	 *  literal top-level key (MONGO-DEPTH.md Tier 1). Additive + optional: relational drivers never
@@ -344,6 +348,9 @@ export interface DatabaseSchema {
 	/** SnoutTime is not installed here but the server carries it, so the designer can offer to
 	 *  switch it on (`create extension`) instead of leaving that to SQL. */
 	snouttimeAvailable?: boolean;
+	/** Postgres `server_version_num` (180000 = 18.0), for advice that is true on one major and
+	 *  wrong on another (18's skip scan). Absent on every other engine, or when it was not read. */
+	serverVersionNum?: number;
 	/** Epoch ms of introspection, for cache staleness checks. */
 	fetchedAt: number;
 }
