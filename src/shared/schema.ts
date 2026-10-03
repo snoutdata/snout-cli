@@ -24,6 +24,10 @@ export interface ColumnInfo {
 	/** Server-generated on insert — MySQL `EXTRA` contains `auto_increment`, SQL Server
 	 *  `is_identity`, Postgres a `nextval(...)` default. Needed for a runnable CREATE TABLE. */
 	autoIncrement?: boolean;
+	/** The database fills this column and REFUSES a value for it: Postgres `GENERATED ALWAYS AS
+	 *  IDENTITY` or a generated (computed) column. An insert or update that names it fails, so a
+	 *  generated type says `never` there. Absent means a value may be given. */
+	generatedAlways?: boolean;
 	/** For document (MongoDB) collections: `true` when this column is a NESTED field projected from
 	 *  document structure — a dotted/bracketed path (`address.city`, `items[].sku`) rather than a
 	 *  literal top-level key (MONGO-DEPTH.md Tier 1). Additive + optional: relational drivers never

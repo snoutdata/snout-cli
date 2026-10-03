@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { authPath, clearAuth, findLink, isExpired, readAuth, resolveRef, writeAuth, writeLink } from './config.js';
@@ -93,6 +93,21 @@ test('DATABASE_URL is replaced rather than duplicated', () => {
 	const contents = readFileSync(second.path, 'utf8');
 	assert.equal(contents.match(/DATABASE_URL=/g)?.length, 1);
 	assert.match(contents, /postgres:\/\/two/);
+});
+
+test('in a git repository .env is added to .gitignore once, and a covering line is respected', () => {
+	const directory = scratch();
+	mkdirSync(join(directory, '.git'));
+	assert.equal(writeEnv(directory, 'postgres://one').ignored, true);
+	assert.equal(writeEnv(directory, 'postgres://two').ignored, false);
+	assert.equal(readFileSync(join(directory, '.gitignore'), 'utf8'), '.env\n');
+	const other = scratch();
+	mkdirSync(join(other, '.git'));
+	writeFileSync(join(other, '.gitignore'), 'node_modules\n.env*');
+	assert.equal(writeEnv(other, 'postgres://x').ignored, false);
+	const outside = scratch();
+	assert.equal(writeEnv(outside, 'postgres://x').ignored, false);
+	assert.equal(existsSync(join(outside, '.gitignore')), false);
 });
 
 test('an existing .env keeps what it had', () => {

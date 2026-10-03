@@ -10,7 +10,9 @@
  * is baked in so that `npx snoutdata` needs no configuration at all.
  */
 
-import { isExpired, readAuth, writeAuth, type StoredAuth } from './config.js';
+import { findLink, isExpired, readAuth, writeAuth, type StoredAuth } from './config.js';
+import { localConnection, localStackFor, type LocalStack } from './local.js';
+import { CliFailure } from './failure.js';
 import { explainNoHuman, noHumanReason } from './interactive.js';
 import { climb } from './ladder.js';
 
@@ -46,7 +48,7 @@ export class NotSignedIn extends Error {
 function notSignedInAdvice(): string {
 	const reason = noHumanReason();
 	if (reason) {
-		return `not signed in, and ${explainNoHuman(reason)}. Set SNOUTDATA_ACCESS_TOKEN to a token from \`snoutdata tokens create\`.`;
+		return `not signed in, and ${explainNoHuman(reason)}. Set SNOUTDATA_ACCESS_TOKEN to a token made at https://dashboard.snoutdata.com/#/tokens, or by \`snoutdata tokens create\` on a machine that is signed in.`;
 	}
 	return 'not signed in: run `snoutdata login`, or set SNOUTDATA_ACCESS_TOKEN';
 }
@@ -161,6 +163,19 @@ export async function call<T>(
 	body: unknown = {},
 	method: 'POST' | 'GET' = 'POST'
 ): Promise<T> {
+	// A control-plane call about a local project would be a 404 about a project the cloud never
+	// had. Say what it is instead, before asking anybody to sign in for it.
+	const asked = typeof body === 'object' && body ? (body as { ref?: unknown }).ref : undefined;
+	if (typeof asked === 'string') {
+		const stack = localStack(asked);
+		if (stack) {
+			throw new CliFailure(
+				'usage',
+				`${asked} is a local project (${stack.folder}), and this command is about SnoutData Cloud. Locally: db url, db psql, db push, gen types, keys, status, start, stop, functions, secrets.`,
+				{ ref: asked, local: stack.folder }
+			);
+		}
+	}
 	const token = await currentToken();
 	// A GET carries the ref in the query string, because a function that only READS should
 	// not need a POST to answer — polling an export's progress is not a request to take
@@ -230,7 +245,17 @@ export async function listProjects(): Promise<{ projects: Project[]; allowance: 
 }
 
 export async function connection(ref: string): Promise<Connection> {
+	// A local project answers from its stack folder, never the control plane (local.ts).
+	const stack = localStack(ref);
+	if (stack) {
+		return localConnection(stack);
+	}
 	return call('cloud-project-connection', { ref });
+}
+
+/** The local stack this ref names, if it names one: the folder linked here, then Studio's list. */
+export function localStack(ref: string): LocalStack | null {
+	return localStackFor(ref, findLink(process.cwd())?.local ?? null);
 }
 
 /** What the control plane says about a project's last (or running) export. */

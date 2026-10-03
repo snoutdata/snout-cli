@@ -10,10 +10,12 @@
  */
 
 import { spawn } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { appendFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { open } from 'node:fs/promises';
-import { classifyRestoreErrors, restoreVerdict, dumpFormat } from '../restore.js';
+import { classifyRestoreErrors, planRestore, PRODUCT_ROLE, restoreVerdict, dumpFormat, type RestorePlan } from '../restore.js';
+import { getProducts } from './manage.js';
 import * as api from '../api.js';
 import { CliFailure, fail } from '../failure.js';
 import { canAsk, explainNoHuman, noHumanReason } from '../interactive.js';
@@ -97,7 +99,7 @@ export async function psql(ref: string, rest: readonly string[]): Promise<number
 		],
 		{
 			stdio: 'inherit',
-			env: { ...process.env, PGPASSWORD: details.password, PGSSLMODE: 'require' }
+			env: { ...process.env, PGPASSWORD: details.password, PGSSLMODE: details.ssl === 'disable' ? 'disable' : 'require' }
 		}
 	);
 	return new Promise((resolve, reject) => {
@@ -120,21 +122,50 @@ export async function psql(ref: string, rest: readonly string[]): Promise<number
  * Rewrites an existing line rather than appending a second one: two `DATABASE_URL`s in a
  * file is a bug that takes an hour to find, because which one wins depends on the loader.
  */
-export function writeEnv(directory: string, value: string, key = 'DATABASE_URL'): { path: string; replaced: boolean } {
+export function writeEnv(directory: string, value: string, key = 'DATABASE_URL'): { path: string; replaced: boolean; ignored: boolean } {
 	const path = join(directory, '.env');
 	const line = `${key}=${value}`;
+	// The value holds a password, so in a repository the file is kept out of a commit first.
+	const ignored = ignoreEnv(directory);
 	if (!existsSync(path)) {
 		writeFileSync(path, `${line}\n`);
-		return { path, replaced: false };
+		return { path, replaced: false, ignored };
 	}
 	const existing = readFileSync(path, 'utf8');
 	const pattern = new RegExp(`^${key}=.*$`, 'm');
 	if (pattern.test(existing)) {
 		writeFileSync(path, existing.replace(pattern, line));
-		return { path, replaced: true };
+		return { path, replaced: true, ignored };
 	}
 	appendFileSync(path, existing.endsWith('\n') ? `${line}\n` : `\n${line}\n`);
-	return { path, replaced: false };
+	return { path, replaced: false, ignored };
+}
+
+/**
+ * Add `.env` to the `.gitignore` beside it, when the folder is in a git repository and no line
+ * there already covers it. True when a line was added.
+ *
+ * A plain read of the one file rather than `git check-ignore`, which needs git installed: a
+ * pattern elsewhere (a parent's .gitignore, a global one) means a redundant line, never a
+ * missing one, and a redundant line costs nothing.
+ */
+export function ignoreEnv(directory: string): boolean {
+	let at = directory;
+	while (!existsSync(join(at, '.git'))) {
+		const up = dirname(at);
+		if (up === at) {
+			return false;
+		}
+		at = up;
+	}
+	const path = join(directory, '.gitignore');
+	const existing = existsSync(path) ? readFileSync(path, 'utf8') : '';
+	const covered = existing.split(/\r?\n/).some((raw) => /^\/?(\.env|\.env\*|\*\.env|\.env\.\*)$/.test(raw.trim()));
+	if (covered) {
+		return false;
+	}
+	appendFileSync(path, existing === '' || existing.endsWith('\n') ? '.env\n' : '\n.env\n');
+	return true;
 }
 
 /**
@@ -216,9 +247,11 @@ export async function exportDatabase(
 	}
 	emit({ ref, path: options.out, bytes: written, rolesPath }, () => {
 		say(`Saved ${describeBytes(written)} to ${options.out}.`);
+		// Into one of ours, the restore that knows which objects the project already has.
+		say(dim(`Into a SnoutData project: snoutdata db restore --file ${options.out} --ref <ref>`));
 		if (rolesPath) {
 			say(`Saved the roles it needs to ${rolesPath}.`);
-			say(dim('Restore it with, in this order:'));
+			say(dim('Into any other Postgres, in this order:'));
 			say(dim(`  psql --dbname <your database> -f ${rolesPath}`));
 			say(dim(`  pg_restore --dbname <your database> ${options.out}`));
 			// Said plainly because the alternative is a database that looks fine and has
@@ -376,9 +409,50 @@ export async function restoreDatabase(
 		fail('conflict', verdict.reason, { ref, file: path, refusal: verdict.code });
 	}
 
+	// An archive is read first: an export of ours carries the platform's own objects, which the
+	// target already has, and the rows of its auth, storage and push tables, which go into the
+	// target's own tables first (`planRestore`).
+	let plan: RestorePlan | null = null;
+	if (verdict.tool === 'pg_restore') {
+		const toc = await capture('pg_restore', ['--list', path]);
+		const postData = await capture('pg_restore', ['--section=post-data', '--file=-', path]);
+		if (toc.code !== 0 || postData.code !== 0) {
+			fail('failed', `pg_restore could not read ${path}: ${(toc.stderr || postData.stderr).trim().slice(0, 300)}`, { ref, file: path });
+		}
+		plan = planRestore(toc.stdout, postData.stdout);
+		if (plan.products.length > 0) {
+			const products = await getProducts(ref);
+			const isOn = (value: unknown): boolean => Boolean(value && typeof value === 'object' && 'enabled' in value && (value as { enabled: boolean }).enabled);
+			const off = plan.products.filter((product) => !isOn(products[product]));
+			if (off.length > 0) {
+				fail(
+					'conflict',
+					`this dump holds ${off.length > 1 ? `${off.slice(0, -1).join(', ')} and ${off[off.length - 1]}` : off[0]} data, and ${ref} has ${off.length === 1 ? 'it' : 'them'} off. Their tables are the platform's, so the product has to be on to take the rows. Switch ${off.length === 1 ? 'it' : 'them'} on, wait a minute, and run this again:\n${off.map((product) => `  snoutdata products enable ${product} --ref ${ref}`).join('\n')}`,
+					{ ref, file: path, refusal: 'products-off', products: off }
+				);
+			}
+		}
+	}
+
+	if (plan && plan.platformData.length > 0) {
+		// "On" is the switch; the tables come when the product first runs, up to a minute later.
+		const wanted = plan.platformData.flatMap(({ tables }) => tables);
+		const missing = await missingTables(details, wanted);
+		if (missing === null) {
+			fail('failed', `could not check ${ref} for the tables this dump loads into.`, { ref });
+		}
+		const starting = plan.platformData.filter(({ tables }) => tables.some((table) => missing.includes(table))).map(({ product }) => product);
+		if (starting.length > 0) {
+			fail('conflict', `${starting.join(', ')} on ${ref} ${starting.length === 1 ? 'has' : 'have'} not finished setting up ${starting.length === 1 ? 'its' : 'their'} tables yet. Run this again in a minute.`, { ref, file: path, refusal: 'products-starting', products: starting });
+		}
+	}
+
 	say(`Restoring ${path} into ${ref} with ${verdict.tool} (${verdict.format} format).`);
-	const run = await runRestore(details, verdict.tool, path);
+	const run = plan ? await runPlannedRestore(details, path, plan) : await runRestore(details, verdict.tool, path);
 	const errors = classifyRestoreErrors(run.stderr);
+	for (const note of plan?.notes ?? []) {
+		say(dim(note));
+	}
 
 	// A non-zero exit whose every error is one the project's owner could never have avoided
 	// is a success. See `classifyRestoreErrors`: an export of ours, restored into a project
@@ -421,8 +495,12 @@ async function countTables(details: api.Connection): Promise<number | null> {
 				"select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace" +
 					" where c.relkind = 'r' and n.nspname not in ('pg_catalog', 'information_schema')" +
 					" and n.nspname not like 'pg\\_toast%'" +
-					" and not exists (select 1 from pg_depend d where d.objid = c.oid and d.deptype = 'e')"],
-			{ stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: details.password, PGSSLMODE: 'require' } }
+					" and not exists (select 1 from pg_depend d where d.objid = c.oid and d.deptype = 'e')" +
+					// And not the platform's: a project with auth, storage or push on has their
+					// tables, owned by those products' roles, and counting them refused every
+					// restore into such a project (2026-10-02).
+					" and pg_get_userbyid(c.relowner) !~ '^(snoutpod_admin|snout_[a-z]+_admin)$'"],
+			{ stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: details.password, PGSSLMODE: details.ssl === 'disable' ? 'disable' : 'require' } }
 		);
 		let out = '';
 		child.stdout.on('data', (chunk) => (out += String(chunk)));
@@ -438,14 +516,89 @@ async function countTables(details: api.Connection): Promise<number | null> {
 	});
 }
 
-function runRestore(details: api.Connection, tool: 'psql' | 'pg_restore', path: string): Promise<{ code: number; stderr: string }> {
+/** Which of these `schema.table` names this database does not have; null when psql could not ask. */
+function missingTables(details: api.Connection, tables: readonly string[]): Promise<string[] | null> {
+	if (tables.length === 0) {
+		return Promise.resolve([]);
+	}
+	// Names from our own archive's platform schemas, quoted as literals all the same.
+	const list = tables.map((table) => `'${table.replace(/'/g, "''")}'`).join(', ');
+	return new Promise((resolve) => {
+		const child = spawn(
+			'psql',
+			['--host', details.host, '--port', String(details.port), '--username', details.user, '--dbname', details.database, '--no-psqlrc', '-tAc',
+				`select t from unnest(array[${list}]) t where to_regclass(t) is null`],
+			{ stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: details.password, PGSSLMODE: details.ssl === 'disable' ? 'disable' : 'require' } }
+		);
+		let out = '';
+		child.stdout.on('data', (chunk) => (out += String(chunk)));
+		child.on('error', () => resolve(null));
+		child.on('close', (code) => resolve(code === 0 ? out.split('\n').map((line) => line.trim()).filter(Boolean) : null));
+	});
+}
+
+/** A local pg_restore that only reads the archive: its table of contents, its post-data SQL. */
+function capture(tool: string, args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+	return new Promise((resolve) => {
+		const child = spawn(tool, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+		let stdout = '';
+		let stderr = '';
+		child.stdout.on('data', (chunk) => (stdout += String(chunk)));
+		child.stderr.on('data', (chunk) => (stderr += String(chunk)));
+		child.on('error', (error) => {
+			warn((error as NodeJS.ErrnoException).code === 'ENOENT' ? `${tool} is not installed, and this dump needs it.` : String(error));
+			resolve({ code: 127, stdout, stderr });
+		});
+		child.on('close', (code) => resolve({ code: code ?? 0, stdout, stderr }));
+	});
+}
+
+/**
+ * The two passes `planRestore` asks for, each from a list of the archive's own entries: the
+ * platform tables' rows first, then everything the customer owns. A failed first pass does
+ * not stop the second, so the classification afterwards sees every error at once.
+ */
+async function runPlannedRestore(details: api.Connection, path: string, plan: RestorePlan): Promise<{ code: number; stderr: string }> {
+	const lists = join(tmpdir(), `snoutdata-restore-${process.pid}-${Date.now()}`);
+	let code = 0;
+	let stderr = '';
+	try {
+		for (const { product, clear, lines } of plan.platformData) {
+			// As the product's own role, which the project's owner is a member of: its tables'
+			// rows and its sequences, which the owner alone may not set.
+			if (clear.length > 0) {
+				writeFileSync(`${lists}.sql`, `set role ${PRODUCT_ROLE[product]};\n${clear.map((table) => `delete from ${table};`).join('\n')}\n`, 'utf8');
+				const emptied = await runRestore(details, 'psql', `${lists}.sql`, ['--quiet']);
+				code = code || emptied.code;
+				stderr += emptied.stderr;
+			}
+			writeFileSync(`${lists}.platform`, `${lines.join('\n')}\n`, 'utf8');
+			const first = await runRestore(details, 'pg_restore', path, ['--data-only', `--role=${PRODUCT_ROLE[product]}`, `--use-list=${lists}.platform`]);
+			code = code || first.code;
+			stderr += first.stderr;
+		}
+		writeFileSync(`${lists}.rest`, `${plan.rest.join('\n')}\n`, 'utf8');
+		const second = await runRestore(details, 'pg_restore', path, [`--use-list=${lists}.rest`]);
+		return { code: code || second.code, stderr: stderr + second.stderr };
+	} finally {
+		for (const suffix of ['.platform', '.rest', '.sql']) {
+			try {
+				unlinkSync(`${lists}${suffix}`);
+			} catch {
+				// Never written, or already gone.
+			}
+		}
+	}
+}
+
+function runRestore(details: api.Connection, tool: 'psql' | 'pg_restore', path: string, extra: string[] = []): Promise<{ code: number; stderr: string }> {
 	const shared = ['--host', details.host, '--port', String(details.port), '--username', details.user, '--dbname', details.database];
 	const args = tool === 'psql'
-		? [...shared, '--no-psqlrc', '-v', 'ON_ERROR_STOP=1', '-f', path]
+		? [...shared, '--no-psqlrc', '-v', 'ON_ERROR_STOP=1', ...extra, '-f', path]
 		// --no-owner and --no-privileges because the roles in the dump are the SOURCE
 		// project's, and they do not exist here: every GRANT would fail and the owner would
 		// be a role this database has never heard of.
-		: [...shared, '--no-owner', '--no-privileges', path];
+		: [...shared, '--no-owner', '--no-privileges', ...extra, path];
 	return new Promise((resolve) => {
 		// stderr is piped rather than inherited so it can be CLASSIFIED afterwards, and
 		// forwarded as it arrives so a long restore still shows progress. Both, not either:
@@ -453,7 +606,7 @@ function runRestore(details: api.Connection, tool: 'psql' | 'pg_restore', path: 
 		// to judge.
 		const child = spawn(tool, args, {
 			stdio: ['ignore', 'inherit', 'pipe'],
-			env: { ...process.env, PGPASSWORD: details.password, PGSSLMODE: 'require' }
+			env: { ...process.env, PGPASSWORD: details.password, PGSSLMODE: details.ssl === 'disable' ? 'disable' : 'require' }
 		});
 		let stderr = '';
 		child.stderr?.on('data', (chunk) => {

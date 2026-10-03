@@ -106,7 +106,7 @@ function runSql(details: Connection, sql: string, extra: readonly string[] = [])
 				'-v', 'ON_ERROR_STOP=1',
 				...extra
 			],
-			{ stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: details.password, PGSSLMODE: 'require' } }
+			{ stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: details.password, PGSSLMODE: details.ssl === 'disable' ? 'disable' : 'require' } }
 		);
 		let out = '';
 		let err = '';

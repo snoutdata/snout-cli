@@ -59,9 +59,17 @@ export async function create(options: {
 	let project = created.project;
 	if (options.wait) {
 		say('Waiting for it to start…');
+		// A line when the state CHANGES, not one a poll: fourteen "creating" lines said nothing
+		// the first one had not.
+		let shown = '';
 		project = await waitForReady(ref, {
 			timeoutMs: options.timeoutMs,
-			onTick: (state) => say(dim(`  ${state}`))
+			onTick: (state) => {
+				if (state !== shown) {
+					shown = state;
+					say(dim(`  ${state}`));
+				}
+			}
 		});
 	}
 	if (options.link) {
@@ -111,7 +119,7 @@ export async function resetPassword(ref: string): Promise<void> {
 	emit(result, () => {
 		process.stdout.write(`${result.password}\n`);
 		// The honest bit, and it is why this is not silent: the new password becomes true
-		// when the project restarts with it, a few seconds from now.
+		// when the host applies it, a few seconds from now (no restart since migration 120).
 		say(`New password for ${result.user}. It applies ${result.appliesIn}.`);
 	});
 }

@@ -240,7 +240,13 @@ function optionalOnInsert(column: ColumnInfo): boolean {
 	return column.nullable || column.autoIncrement === true || (column.default !== null && column.default !== undefined);
 }
 
-function columnLine(emitter: Emitter, column: ColumnInfo, level: number, optional: boolean): string {
+function columnLine(emitter: Emitter, column: ColumnInfo, level: number, optional: boolean, writing = false): string {
+	// A value the database refuses to be given (an `ALWAYS` identity, a computed column) is
+	// `never` in Insert and Update, as the official client's generated types write it, so the type stops the
+	// insert Postgres would refuse with "cannot insert a non-DEFAULT value".
+	if (writing && column.generatedAlways === true) {
+		return `${pad(level)}${key(column.name)}?: never`;
+	}
 	const type = typeOf(emitter, column.dataType);
 	const value = column.nullable ? `${type} | null` : type;
 	return `${pad(level)}${key(column.name)}${optional ? '?' : ''}: ${value}`;
@@ -301,12 +307,12 @@ function tableBlock(emitter: Emitter, table: TableInfo, level: number): string[]
 	if (table.kind !== 'view') {
 		lines.push(`${pad(level + 1)}Insert: {`);
 		for (const column of columns) {
-			lines.push(columnLine(emitter, column, level + 2, optionalOnInsert(column)));
+			lines.push(columnLine(emitter, column, level + 2, optionalOnInsert(column), true));
 		}
 		lines.push(`${pad(level + 1)}}`);
 		lines.push(`${pad(level + 1)}Update: {`);
 		for (const column of columns) {
-			lines.push(columnLine(emitter, column, level + 2, true));
+			lines.push(columnLine(emitter, column, level + 2, true, true));
 		}
 		lines.push(`${pad(level + 1)}}`);
 	}

@@ -210,7 +210,7 @@ export async function restoreWindowCommand(ref: string): Promise<void> {
 	emit(answer, () => {
 		const w = answer.restore;
 		if (!w.available) {
-			say(w.pitrEnabled ? `${ref} has no backup to restore from yet.` : `Point-in-time restore is not part of the ${w.tier} plan.`);
+			say(w.pitrEnabled ? `${ref} has no backup to restore from yet.` : `Point-in-time restore is part of the Pro and Business plans, and this project is on ${w.tier}.`);
 			return;
 		}
 		say(`${ref} can be restored to any moment from ${w.earliest} to ${w.latest}.`);
@@ -254,7 +254,7 @@ export async function showCommand(ref: string): Promise<void> {
 			['ref', p.ref],
 			['state', p.state],
 			['region', p.region],
-			['auth / storage / data-api', `${on(p.products.auth)} / ${on(p.products.storage)} / ${on(p.products.dataApi)}`],
+			['auth / storage / data-api / push', `${on(p.products.auth)} / ${on(p.products.storage)} / ${on(p.products.dataApi)} / ${on(p.products.push)}`],
 			['functions', list(p.functions)],
 			['secrets', list(p.secretNames)],
 			['domains', list(p.domains)],

@@ -57,6 +57,8 @@ interface DeployedFunction {
 interface FunctionsAnswer {
 	ref: string;
 	functions: DeployedFunction[];
+	/** Deploy and delete: whether the host had the change before the control plane answered. */
+	live?: boolean;
 	limit: {
 		deployed: number | null;
 		maxFunctions: number | null;
@@ -335,7 +337,7 @@ export async function list(ref: string): Promise<void> {
 export async function remove(ref: string, name: string): Promise<void> {
 	const answer = await runRemove(ref, name);
 	emit(answer, () => {
-		say(`${name} is gone. It stops answering within a few seconds.`);
+		say(answer.live ? `${name} is gone.` : `${name} is gone. It stops answering within a few seconds.`);
 	});
 }
 

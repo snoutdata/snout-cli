@@ -57,6 +57,26 @@ async function readStdin(): Promise<string> {
 	return Buffer.concat(chunks).toString('utf8').replace(/\n$/, '');
 }
 
+/** `NAME=value` arguments, or one NAME and a value on stdin, as pairs. Shared with the local path. */
+export async function pairsFrom(assignments: readonly string[], options: { stdin: boolean }): Promise<{ name: string; value: string }[]> {
+	if (assignments.length === 0) {
+		throw new UsageError('secrets set needs NAME=value, or NAME with --stdin');
+	}
+	if (options.stdin) {
+		if (assignments.length !== 1) {
+			throw new UsageError('--stdin sets one secret, so it takes one NAME');
+		}
+		return [{ name: assignments[0] as string, value: await readStdin() }];
+	}
+	return assignments.map((argument) => {
+		const pair = splitAssignment(argument);
+		if (!pair) {
+			throw new UsageError(`${argument} is not NAME=value. Use --stdin to set a value from a pipe.`);
+		}
+		return pair;
+	});
+}
+
 export async function set(
 	ref: string,
 	assignments: readonly string[],
