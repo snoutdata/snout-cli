@@ -12,6 +12,7 @@
 import * as api from '../api.js';
 import { UsageError } from '../args.js';
 import { bold, dim, emit, say, table } from '../output.js';
+import { restoreReason } from '../mcp.js';
 
 export type Product = 'auth' | 'storage' | 'data-api' | 'push';
 
@@ -209,8 +210,9 @@ export async function restoreWindowCommand(ref: string): Promise<void> {
 	const answer = await restoreWindow(ref);
 	emit(answer, () => {
 		const w = answer.restore;
-		if (!w.available) {
-			say(w.pitrEnabled ? `${ref} has no backup to restore from yet.` : `Point-in-time restore is part of the Pro and Business plans, and this project is on ${w.tier}.`);
+		const reason = restoreReason(ref, w);
+		if (reason) {
+			say(reason);
 			return;
 		}
 		say(`${ref} can be restored to any moment from ${w.earliest} to ${w.latest}.`);

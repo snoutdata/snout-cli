@@ -8,7 +8,8 @@
  */
 
 import * as api from '../api.js';
-import { call, listProjects, waitForReady, type Project } from '../api.js';
+import { call, listProjects, waitForReady, waitForSettled, type Project } from '../api.js';
+import { CliFailure } from '../failure.js';
 import { writeLink } from '../config.js';
 import { bold, dim, emit, relative, say, table } from '../output.js';
 
@@ -98,16 +99,33 @@ export async function create(options: {
 
 export async function action(
 	verb: 'pause' | 'resume' | 'delete',
-	ref: string
+	ref: string,
+	options: { wait?: boolean; timeoutMs?: number } = {}
 ): Promise<void> {
 	const fn = `cloud-project-${verb}`;
 	const result = await call<{ project: Project; changed: boolean }>(fn, { ref });
-	emit(result, () => {
-		say(
-			result.changed
-				? `${ref}: ${verb}d.`
-				: `${ref} was already ${verb === 'delete' ? 'deleted' : `${verb}d`}.`
-		);
+	const done = verb === 'delete' ? 'deleted' : `${verb}d`;
+	if (options.wait === false) {
+		emit({ ...result, settled: false }, () => say(`${ref}: asked to be ${done}. \`snoutdata projects list\` shows when it is.`));
+		return;
+	}
+	// One line per state, as `create` does, so a wait is visibly a wait.
+	let shown = result.project?.state ?? '';
+	const project = await waitForSettled(ref, verb, {
+		timeoutMs: options.timeoutMs,
+		onTick: (state) => {
+			if (state !== shown) {
+				shown = state;
+				say(dim(`  ${state}`));
+			}
+		}
+	});
+	const state = project?.state ?? 'deleted';
+	if (state === 'error') {
+		throw new CliFailure('failed', `${ref} went to error instead of ${done}${project?.stateDetail ? `: ${project.stateDetail}` : ''}.`, { ref, state });
+	}
+	emit({ ...result, ...(project ? { project } : {}), settled: true }, () => {
+		say(result.changed ? `${ref}: ${done}.` : `${ref} was already ${done}.`);
 	});
 }
 

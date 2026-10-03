@@ -139,6 +139,22 @@ export function codeForStatus(status: number): FailureCode {
 }
 
 /**
+ * A file the person named that is not there, as a sentence, or null.
+ *
+ * `push credentials set fcm --file x.json` with a typo printed Node's own
+ * `ENOENT: no such file or directory, open '<absolute path>'` and exited 1, as if the CLI had
+ * broken (§3n). Every `--file`/`--p8` read goes through `readFile`, so this is decided once,
+ * here, for all of them.
+ */
+export function missingFile(error: unknown): string | null {
+	const errno = error as NodeJS.ErrnoException | null;
+	if (!errno || typeof errno !== 'object' || errno.code !== 'ENOENT' || typeof errno.path !== 'string' || errno.syscall === 'spawn') {
+		return null;
+	}
+	return `no file at ${errno.path}`;
+}
+
+/**
  * A thrown thing that is not one of ours as a failure code.
  *
  * Node reports every connection problem as a bare `TypeError: fetch failed` with the real
