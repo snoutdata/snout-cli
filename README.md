@@ -186,8 +186,8 @@ terminal that has no browser at all. With no person present (not a terminal, `--
 
 ## Documentation
 
-- Everything an agent needs, on one page: <https://docs.snoutdata.com/cloud/agent>
-- Full CLI reference: <https://docs.snoutdata.com/cloud/cli>
+- Everything an agent needs, on one page: <https://docs.snoutdata.com/developers/agent>
+- Full CLI reference: <https://docs.snoutdata.com/developers/cli>
 - Getting started: <https://docs.snoutdata.com/cloud/getting-started>
 - Plans and limits: <https://docs.snoutdata.com/cloud/limits>
 
