@@ -17,7 +17,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { CliFailure, EXIT, codeForStatus, codeForThrown, type FailureCode } from './failure.js';
+import { CliFailure, EXIT, codeForStatus, codeForThrown, missingFile, type FailureCode } from './failure.js';
 
 test('every code has an exit code, and none of them is zero', () => {
 	const codes: FailureCode[] = [
@@ -183,4 +183,13 @@ test('help for one command answers about that command, not the whole manual', { 
 	const parsed = JSON.parse(asJson.stdout) as { commands: { name: string }[] };
 	assert.ok(parsed.commands.every((one) => one.name.startsWith('db')), 'db --help returned commands that are not db');
 	assert.ok(parsed.commands.length >= 5);
+});
+
+test('a file the person named that is not there is a sentence about that file, not Node\'s errno', async () => {
+	const { readFile } = await import('node:fs/promises');
+	const error = await readFile('definitely-not-here.json').catch((thrown: unknown) => thrown);
+	assert.match(missingFile(error) ?? '', /^no file at .*definitely-not-here\.json$/);
+	// A program that is not installed is a different failure, with its own sentence elsewhere.
+	assert.equal(missingFile(Object.assign(new Error('spawn psql ENOENT'), { code: 'ENOENT', syscall: 'spawn', path: 'psql' })), null);
+	assert.equal(missingFile(new TypeError('fetch failed')), null);
 });

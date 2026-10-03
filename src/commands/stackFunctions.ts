@@ -52,7 +52,16 @@ function setOpen(stack: LocalStack, name: string, open: boolean): boolean {
 	return true;
 }
 
-export async function localDeploy(stack: LocalStack, name: string, options: { dir?: string | undefined; verifyJwt: boolean }): Promise<void> {
+export interface LocalDeployed {
+	ref: string;
+	name: string;
+	url: string;
+	verifyJwt: boolean;
+	local: string;
+}
+
+/** The deploy, returning what it did; `localDeploy` prints it. The MCP server calls this one (stdout is its wire). */
+export async function runLocalDeploy(stack: LocalStack, name: string, options: { dir?: string | undefined; verifyJwt: boolean }): Promise<LocalDeployed> {
 	assertFunctionName(name);
 	const source = resolve(options.dir ?? join(process.cwd(), 'functions', name));
 	if (!existsSync(join(source, 'index.ts'))) {
@@ -77,18 +86,27 @@ export async function localDeploy(stack: LocalStack, name: string, options: { di
 			throw new CliFailure('failed', `docker compose up failed after changing who may call ${name}: ${up.err.trim().split(/\r?\n/).slice(-2).join(' ')}`);
 		}
 	}
-	const url = `${stack.apiUrl}/functions/v1/${name}`;
-	emit({ ref: stack.ref, name, url, verifyJwt: options.verifyJwt, local: stack.folder }, () => {
-		say(`${bold(name)} deployed locally: ${url}`);
+	return { ref: stack.ref, name, url: `${stack.apiUrl}/functions/v1/${name}`, verifyJwt: options.verifyJwt, local: stack.folder };
+}
+
+export async function localDeploy(stack: LocalStack, name: string, options: { dir?: string | undefined; verifyJwt: boolean }): Promise<void> {
+	const done = await runLocalDeploy(stack, name, options);
+	emit(done, () => {
+		say(`${bold(name)} deployed locally: ${done.url}`);
 		if (!options.verifyJwt) {
 			say(dim('  Callable with no key (FUNCTIONS_NO_VERIFY_JWT), so it must check what calls it itself.'));
 		}
 	});
 }
 
+/** What `functions list` shows for a local project, as a value. */
+export function localFunctions(stack: LocalStack): { ref: string; local: string; functions: Array<{ name: string; url: string }> } {
+	return { ref: stack.ref, local: stack.folder, functions: functionNames(stack).map((name) => ({ name, url: `${stack.apiUrl}/functions/v1/${name}` })) };
+}
+
 export function localList(stack: LocalStack): void {
 	const names = functionNames(stack);
-	emit({ ref: stack.ref, local: stack.folder, functions: names.map((name) => ({ name, url: `${stack.apiUrl}/functions/v1/${name}` })) }, () => {
+	emit(localFunctions(stack), () => {
 		if (names.length === 0) {
 			say(`No functions in ${join(stack.folder, 'functions')}.`);
 			return;
@@ -97,7 +115,7 @@ export function localList(stack: LocalStack): void {
 	});
 }
 
-export async function localRemove(stack: LocalStack, name: string): Promise<void> {
+export async function runLocalRemove(stack: LocalStack, name: string): Promise<{ ref: string; name: string; removed: true }> {
 	assertFunctionName(name);
 	const target = join(stack.folder, 'functions', name);
 	if (!existsSync(target)) {
@@ -106,7 +124,11 @@ export async function localRemove(stack: LocalStack, name: string): Promise<void
 	rmSync(target, { recursive: true, force: true });
 	setOpen(stack, name, false);
 	await redeploy(stack);
-	emit({ ref: stack.ref, name, removed: true }, () => say(`${name} is gone.`));
+	return { ref: stack.ref, name, removed: true };
+}
+
+export async function localRemove(stack: LocalStack, name: string): Promise<void> {
+	emit(await runLocalRemove(stack, name), () => say(`${name} is gone.`));
 }
 
 /** `functions/.env`, as the README describes it. Values are written single-quoted, as Studio does. */
@@ -144,9 +166,15 @@ export async function localSecretsSet(stack: LocalStack, pairs: Array<{ name: st
 	});
 }
 
+/** The NAMES in `functions/.env`, never the values. */
+export function localSecretNames(stack: LocalStack): { ref: string; local: string; secrets: Array<{ name: string }> } {
+	return { ref: stack.ref, local: stack.folder, secrets: [...readSecrets(stack).keys()].sort().map((name) => ({ name })) };
+}
+
 export function localSecretsList(stack: LocalStack): void {
-	const names = [...readSecrets(stack).keys()].sort();
-	emit({ ref: stack.ref, secrets: names.map((name) => ({ name })) }, () => {
+	const answer = localSecretNames(stack);
+	const names = answer.secrets.map((one) => one.name);
+	emit(answer, () => {
 		say(names.length ? names.join('\n') : `No function secrets in ${secretsPath(stack)}.`);
 	});
 }

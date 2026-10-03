@@ -77,6 +77,11 @@ export interface McpOperations {
 	revokeToken(id: string): Promise<unknown>;
 	/** Forward a borrowed tool to the desktop app. Absent when there is no app. */
 	callBorrowed?(name: string, args: unknown): Promise<unknown>;
+	/**
+	 * The self-hosted stack on this machine that `ref` names (`snoutdata link --local`), or null.
+	 * Absent means no local projects at all, which is what the tests mostly want.
+	 */
+	localProject?(ref: string): { folder: string } | null;
 }
 
 export interface McpOptions {
@@ -145,7 +150,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'list_projects',
-		description: "Every hosted Postgres database on this account, with its ref, name, region, state (ready, paused, error), size, and whether it is read-only because it is over its plan's storage limit.",
+		description: "Every hosted Postgres database on this account, with its ref, name, region, state (ready, paused, error), size, and whether it is read-only because it is over its plan's storage limit. Under `local`, the self-hosted projects on this machine (SnoutData Studio's, or linked with `snoutdata link --local`), whose refs work with get_connection_url, push_migrations, get_project and the function tools.",
 		inputSchema: object({})
 	},
 	{
@@ -160,12 +165,12 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'pause_project',
-		description: 'Stop a project. Its data is kept and the next connection wakes it. A production project refuses this.',
+		description: 'Stop a project, and wait until it is paused. Its data is kept and the next connection wakes it. A production project refuses this.',
 		inputSchema: object({ ref: STRING }, ['ref'])
 	},
 	{
 		name: 'resume_project',
-		description: 'Start a paused project without waiting for a connection to wake it.',
+		description: 'Start a paused project without waiting for a connection to wake it, and wait until it is ready.',
 		inputSchema: object({ ref: STRING }, ['ref'])
 	},
 	{
@@ -190,7 +195,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'reset_password',
-		description: "Rotate the project's database password. THE OLD ONE STOPS WORKING IMMEDIATELY, including any DATABASE_URL already written into a file or a running process. Returns the new connection URL. Use it when a credential has leaked, not routinely.",
+		description: "Rotate the project's database password. THE OLD ONE STOPS WORKING within a few seconds, including any DATABASE_URL already written into a file or a running process; connections already open keep working. Returns the new connection URL, which works once the change applies (wait about five seconds before connecting). Use it when a credential has leaked, not routinely.",
 		inputSchema: object({ ref: STRING }, ['ref'])
 	},
 	{
@@ -246,7 +251,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'get_project',
-		description: 'Everything about one project in one call: its state, region and size, which products are on (auth, storage, data-api), the names of its deployed functions and function secrets, and its custom domains. Never a password or a key.',
+		description: 'Everything about one project in one call: its state, region and size, which products are on (auth, storage, data-api), the names of its deployed functions and function secrets, and its custom domains. Never a password, a key or a download link (export_status has the link to the last export).',
 		inputSchema: object({ ref: STRING }, ['ref'])
 	},
 	{
@@ -302,6 +307,49 @@ const READ_ONLY_TOOLS = new Set([
 	'list_functions', 'list_function_secrets', 'get_project', 'list_products', 'list_domains', 'restore_window'
 ]);
 const DESTRUCTIVE_TOOLS = new Set(['delete_project', 'delete_function', 'reset_password', 'revoke_token', 'remove_domain']);
+
+/** The tools that work on a LOCAL project's ref (`snoutdata link --local`). Every other one is about SnoutData Cloud. */
+const LOCAL_TOOLS = ['get_connection_url', 'push_migrations', 'get_project', 'list_functions', 'deploy_function', 'delete_function', 'list_function_secrets'];
+
+/**
+ * A project row, or a list of them, without the export's download link.
+ *
+ * The link is a presigned URL to a dump of the WHOLE database, good for hours, and two
+ * kilobytes long. `list_projects` and `get_project` handed it to the model on every call
+ * (§3n): a credential to every row in a tool that promises "never a password or a key", and
+ * most of what a small model read in a one-project list. `export_status` still returns it,
+ * which is the tool whose description says so.
+ */
+export function withoutDownloadLink(value: unknown): unknown {
+	if (!value || typeof value !== 'object') {
+		return value;
+	}
+	const record = value as Record<string, unknown>;
+	if (Array.isArray(record.projects)) {
+		return { ...record, projects: record.projects.map(withoutDownloadLink) };
+	}
+	const exported = record.export;
+	if (exported && typeof exported === 'object') {
+		// `rolesSql` too: the export's role script, three more kilobytes on every row.
+		const { url, rolesSql: _roles, ...rest } = exported as Record<string, unknown>;
+		return { ...record, export: { ...rest, hasLink: typeof url === 'string' && url.length > 0 } };
+	}
+	return value;
+}
+
+/**
+ * Why a project cannot be restored to a point, as the sentence `db restore --window` prints,
+ * or null when it can. The window alone (`available: false, pitrEnabled: false`) left a model
+ * to work out that the answer was the plan.
+ */
+export function restoreReason(ref: string, window: { available?: boolean; pitrEnabled?: boolean; tier?: string }): string | null {
+	if (window.available) {
+		return null;
+	}
+	return window.pitrEnabled
+		? `${ref} has no backup to restore from yet.`
+		: `Point-in-time restore is part of the Pro and Business plans, and this project is on ${window.tier ?? 'another plan'}.`;
+}
 
 /** A tool as it goes on the wire, with its annotations. */
 export function annotated(tool: ToolDefinition): ToolDefinition {
@@ -451,13 +499,23 @@ async function callTool(
 	if (needsRef.includes(name) && !ref) {
 		return said(id, `${name} needs a project ref. Call list_projects to see them.`, true);
 	}
+	// A local project's ref asked of a cloud tool: one sentence naming the tools that DO work,
+	// not the control plane's 404 or four copies of the CLI's refusal (§3n).
+	const local = ref && operations.localProject ? operations.localProject(ref) : null;
+	if (local && !LOCAL_TOOLS.includes(name)) {
+		return said(
+			id,
+			`${ref} is the self-hosted project in ${local.folder}, and ${name} is about SnoutData Cloud. On a local project these tools work: ${LOCAL_TOOLS.join(', ')}.`,
+			true
+		);
+	}
 
 	try {
 		switch (name) {
 			case 'whoami':
 				return said(id, await operations.whoami());
 			case 'list_projects':
-				return said(id, await operations.listProjects());
+				return said(id, withoutDownloadLink(await operations.listProjects()));
 			case 'create_project': {
 				const projectName = stringArg(args, 'name');
 				if (!projectName) {
@@ -493,12 +551,22 @@ async function callTool(
 				return said(id, await operations.exportStatus(ref!));
 			case 'start_export':
 				return said(id, await operations.requestExport(ref!));
-			case 'reset_password':
-				return said(id, await operations.resetPassword(ref!));
+			case 'reset_password': {
+				// The description promises a URL, and a bare password left a model to assemble one.
+				// `connection` serves the new password as soon as the reset returns.
+				const reset = (await operations.resetPassword(ref!)) as { appliesIn?: string };
+				const details = await operations.connection(ref!);
+				return said(id, {
+					url: details.uri,
+					appliesIn: reset.appliesIn ?? 'within a few seconds',
+					next: 'Wait about five seconds before connecting with this URL: until the change applies the new password is refused and the old one still works. Then update DATABASE_URL wherever it is set.',
+					warning: 'This URL contains a live database password. Put it in an environment variable, not in a file that is committed.'
+				});
+			}
 			case 'list_teams':
 				return said(id, await operations.listTeams());
 			case 'get_project':
-				return said(id, await operations.getProject(ref!));
+				return said(id, withoutDownloadLink(await operations.getProject(ref!)));
 			case 'list_products':
 				return said(id, await operations.getProducts(ref!));
 			case 'set_product': {
@@ -522,8 +590,11 @@ async function callTool(
 				}
 				return said(id, await operations.domainAction(ref!, name.split('_')[0] as 'add' | 'verify' | 'remove', hostname));
 			}
-			case 'restore_window':
-				return said(id, await operations.restoreWindow(ref!));
+			case 'restore_window': {
+				const answer = (await operations.restoreWindow(ref!)) as { restore?: { available?: boolean; pitrEnabled?: boolean; tier?: string } };
+				const reason = answer && answer.restore ? restoreReason(ref!, answer.restore) : null;
+				return said(id, reason ? { ...answer, reason } : answer);
+			}
 			case 'restore_to_point': {
 				const at = stringArg(args, 'at');
 				if (!at) {

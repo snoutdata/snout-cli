@@ -41,6 +41,10 @@ import { TOOLS, handle, takeMessages, type McpOperations, type McpOptions, type 
 import * as desktop from '../desktop.js';
 import { runPush } from './push.js';
 import { runDeploy, runList, runRemove, runSize } from './functions.js';
+import { localFunctions, localSecretNames, runLocalDeploy, runLocalRemove } from './stackFunctions.js';
+import { readStack, studioProjects } from '../local.js';
+import { findLink } from '../config.js';
+import { resolve } from 'node:path';
 
 /**
  * The impure half, in one object.
@@ -49,9 +53,14 @@ import { runDeploy, runList, runRemove, runSize } from './functions.js';
  * what to say, and it says it in JSON to a model rather than in prose to a terminal.
  */
 function operations(): McpOperations {
+	// A local project (`snoutdata link --local`, or one Studio set up) answers from its stack
+	// folder, as the CLI's own commands do; the cloud tools refuse its ref in mcp.ts.
+	const local = (ref: string) => api.localStack(ref);
 	return {
 		whoami: () => api.whoami(),
-		listProjects: () => api.listProjects(),
+		// The local projects beside the hosted ones, or an agent has no way to learn a local ref.
+		listProjects: async () => ({ ...(await api.listProjects()), local: localProjects() }),
+		localProject: (ref) => local(ref),
 		createProject: async (input) => {
 			const created = await api.call<{ project: api.Project }>('cloud-project-create', {
 				name: input.name,
@@ -83,12 +92,24 @@ function operations(): McpOperations {
 		listTeams: () => api.call('cloud-team-list', {}),
 		// The result-returning halves, for the same reason `pushMigrations` uses one:
 		// stdout is the JSON-RPC wire here.
-		deployFunction: (ref, name, options) => runDeploy(ref, name, options).then((done) => done.answer),
-		listFunctions: (ref) => runList(ref),
-		deleteFunction: (ref, name) => runRemove(ref, name),
+		deployFunction: (ref, name, options) => {
+			const stack = local(ref);
+			return stack ? runLocalDeploy(stack, name, options) : runDeploy(ref, name, options).then((done) => done.answer);
+		},
+		listFunctions: async (ref) => {
+			const stack = local(ref);
+			return stack ? localFunctions(stack) : runList(ref);
+		},
+		deleteFunction: (ref, name) => {
+			const stack = local(ref);
+			return stack ? runLocalRemove(stack, name) : runRemove(ref, name);
+		},
 		sizeFunction: (ref, name, options) => runSize(ref, name, options),
 		// Names and sizes. There is no tool that SETS one, and `McpOperations` says why.
-		listFunctionSecrets: (ref) => api.call('cloud-project-secrets', { ref }),
+		listFunctionSecrets: async (ref) => {
+			const stack = local(ref);
+			return stack ? localSecretNames(stack) : api.call('cloud-project-secrets', { ref });
+		},
 		listTokens: () => api.call('cloud-token-list', {}),
 		createToken: (name, expiresInDays, project) =>
 			api.call('cloud-token-create', {
@@ -97,19 +118,60 @@ function operations(): McpOperations {
 				...(project ? { project } : {})
 			}),
 		revokeToken: (id) => api.call('cloud-token-revoke', { id }),
-		getProject: (ref) => manage.getProject(ref),
+		getProject: async (ref) => {
+			const stack = local(ref);
+			if (!stack) {
+				return manage.getProject(ref);
+			}
+			return {
+				ref: stack.ref,
+				name: stack.name,
+				local: stack.folder,
+				api: stack.apiUrl,
+				database: `127.0.0.1:${stack.dbPort}`,
+				functions: localFunctions(stack).functions.map((one) => one.name),
+				secretNames: localSecretNames(stack).secrets.map((one) => one.name)
+			};
+		},
 		getProducts: (ref) => manage.getProducts(ref),
 		setProduct: (ref, product, enabled) => manage.setProduct(ref, product, enabled),
 		listDomains: (ref) => manage.listDomains(ref),
 		domainAction: (ref, action, hostname) => manage.domainAction(ref, action, hostname),
 		restoreWindow: (ref) => manage.restoreWindow(ref),
 		restoreTo: (ref, at, name) => manage.restoreTo(ref, at, name),
-		setProjectState: (verb, ref) => api.call(`cloud-project-${verb}`, { ref }),
+		// Waited for, as create_project is: "resumed" while the project is still paused sends an
+		// agent to connect and wait on a wake it thinks has already happened (§3n).
+		setProjectState: async (verb, ref) => {
+			const asked = await api.call<{ project: api.Project; changed: boolean }>(`cloud-project-${verb}`, { ref });
+			try {
+				const project = await api.waitForSettled(ref, verb, { timeoutMs: 120_000 });
+				return { changed: asked.changed, state: project?.state ?? 'deleted', ...(project ? { project } : {}) };
+			} catch {
+				return { ...asked, settled: false, note: `${ref} has not finished yet. Call list_projects in a few seconds.` };
+			}
+		},
 		connection: (ref) => api.connection(ref),
 		// The result-returning half, never the printing one: stdout is the JSON-RPC wire
 		// here, and a command that writes to it corrupts the protocol.
 		pushMigrations: (ref, options) => runPush(ref, { dir: options.dir, dryRun: options.dryRun })
 	};
+}
+
+/** Studio's local projects, plus the stack this folder is linked to when Studio does not list it. */
+function localProjects(): Array<{ ref: string; name: string | null; folder: string }> {
+	const listed = studioProjects()
+		.filter((one): one is { ref: string; name: string | null; folder: string } => one.ref !== null)
+		.map((one) => ({ ref: one.ref, name: one.name, folder: one.folder }));
+	const linked = findLink(process.cwd())?.local;
+	if (linked && !listed.some((one) => resolve(one.folder) === resolve(linked))) {
+		try {
+			const stack = readStack(linked);
+			listed.push({ ref: stack.ref, name: stack.name, folder: stack.folder });
+		} catch {
+			// A link to a folder that is no longer a stack lists nothing; `link --local` says why.
+		}
+	}
+	return listed;
 }
 
 /** The prefix every borrowed tool wears. */

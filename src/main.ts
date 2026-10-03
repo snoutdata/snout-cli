@@ -19,7 +19,7 @@ import { COMMANDS } from './catalogue.js';
 import { ApiError, NotSignedIn, localStack, whoami } from './api.js';
 import { stackShow, stackStart, stackStatus, stackStop } from './commands/stack.js';
 import { localDeploy, localList, localRemove, localSecretsList, localSecretsSet, localSecretsUnset } from './commands/stackFunctions.js';
-import { CliFailure, EXIT, codeForStatus, codeForThrown } from './failure.js';
+import { CliFailure, EXIT, codeForStatus, codeForThrown, missingFile } from './failure.js';
 import { canAsk, interactiveState, setInteractive } from './interactive.js';
 import { clearAuth, resolveRef, writeAuth, writeLink } from './config.js';
 import { start as deviceStart, waitForApproval } from './device.js';
@@ -68,7 +68,7 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
 
   snoutdata projects list
   snoutdata projects create --name X [--region R] [--no-wait]
-  snoutdata projects pause|resume|delete [--ref R]
+  snoutdata projects pause|resume|delete [--ref R] [--no-wait]
   snoutdata link --ref R                   write .snoutdata/project.json here
   snoutdata link --local [NAME|FOLDER]     use a local project (Studio's, or a snout-stack folder) here
 
@@ -344,7 +344,10 @@ async function run(args: ParsedArgs): Promise<number> {
 				case 'pause':
 				case 'resume':
 				case 'delete':
-					await projects.action(action, flagString(args, 'ref') ?? rest[0] ?? ref());
+					await projects.action(action, flagString(args, 'ref') ?? rest[0] ?? ref(), {
+						wait: !flagBoolean(args, 'no-wait'),
+						timeoutMs: timeoutMs()
+					});
 					return 0;
 				case 'show':
 					{
@@ -743,6 +746,11 @@ function report(error: unknown): number {
 		const code = codeForStatus(error.status);
 		emitFailure(code, error.message, { status: error.status });
 		return EXIT[code];
+	}
+	const missing = missingFile(error);
+	if (missing) {
+		emitFailure('usage', missing);
+		return EXIT.usage;
 	}
 	// Anything else: a bug of ours, or the network wearing a TypeError. `codeForThrown`
 	// is what tells those apart, and it is the difference between an agent retrying and

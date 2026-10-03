@@ -321,6 +321,42 @@ export async function exportStatus(ref: string): Promise<{ ref: string; export: 
 }
 
 /**
+ * Wait for a pause, resume or delete to be TRUE, not merely asked for.
+ *
+ * Each of those returns as soon as the row says what is wanted; the host makes it so seconds
+ * later. Until 2026-10-03 the CLI printed "resumed." at once while the project stayed `paused`
+ * for twelve seconds, and a second pause answered "already paused" while it was still
+ * `pausing` (docs/cloud/QA-RETEST.md §3n). Resolves with the project as settled, or null once
+ * a deleted one has left the list.
+ */
+export async function waitForSettled(
+	ref: string,
+	verb: 'pause' | 'resume' | 'delete',
+	options: { timeoutMs?: number; onTick?: (state: string) => void } = {}
+): Promise<Project | null> {
+	const deadline = Date.now() + (options.timeoutMs ?? 300_000);
+	for (;;) {
+		const { projects } = await listProjects();
+		const project = projects.find((candidate) => candidate.ref === ref) ?? null;
+		const state = project?.state ?? 'deleted';
+		options.onTick?.(state);
+		if (isSettled(verb, state)) {
+			return project;
+		}
+		if (Date.now() >= deadline) {
+			throw new ApiError(504, `${ref} is still ${state} after waiting`);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 2_000));
+	}
+}
+
+/** Whether a project in `state` has finished what `verb` asked. `error` ends a wait too: it will not settle on its own. */
+export function isSettled(verb: 'pause' | 'resume' | 'delete', state: string): boolean {
+	const settled = { pause: 'paused', resume: 'ready', delete: 'deleted' }[verb];
+	return state === settled || state === 'error';
+}
+
+/**
  * Wait for a project to be ready.
  *
  * A create returns before anything is running — the row is the request, and a host makes

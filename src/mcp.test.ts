@@ -404,3 +404,55 @@ test('create_token turns an expiry date into the days the control plane reads', 
 	assert.equal(expiryDays('2026-09-01', now), null);
 	assert.equal(expiryDays('next tuesday', now), null);
 });
+
+test('a project row never carries the export download link; export_status still does', async () => {
+	const link = 'https://bucket.s3.amazonaws.com/ref/exports/x.dump?X-Amz-Security-Token=secret';
+	const row = { ref: 'b7kq2m9xt4rvz', export: { pending: false, completedAt: '2026-10-03T01:48:18Z', url: link, rolesSql: 'CREATE ROLE anon;' } };
+	const ops = operations({
+		listProjects: async () => ({ projects: [row] }),
+		getProject: async () => ({ ...row, products: {} }),
+		exportStatus: async (ref) => ({ ref, export: { url: link } })
+	});
+	for (const name of ['list_projects', 'get_project']) {
+		const said = text(await call(name, { ref: 'b7kq2m9xt4rvz' }, ops));
+		assert.doesNotMatch(said, /X-Amz/, `${name} handed over a presigned dump link`);
+		assert.match(said, /"hasLink": true/);
+		assert.doesNotMatch(said, /CREATE ROLE/, `${name} carried the export's role script`);
+	}
+	assert.match(text(await call('export_status', { ref: 'b7kq2m9xt4rvz' }, ops)), /X-Amz/);
+});
+
+test('restore_window says why it cannot, in the sentence the CLI prints', async () => {
+	const answer = await call('restore_window', { ref: 'b7kq2m9xt4rvz' }, operations({
+		restoreWindow: async (ref) => ({ ref, restore: { available: false, pitrEnabled: false, tier: 'plus' } })
+	}));
+	assert.match(text(answer), /part of the Pro and Business plans, and this project is on plus/);
+});
+
+test('reset_password returns a URL, as its description promises, and says to wait for it', async () => {
+	const answer = await call('reset_password', { ref: 'b7kq2m9xt4rvz' }, operations({
+		resetPassword: async (ref) => ({ ref, user: `${ref}_owner`, password: 'p4ss', appliesIn: 'within a few seconds' })
+	}));
+	const said = JSON.parse(text(answer)) as { url: string; next: string };
+	assert.match(said.url, /^postgres:\/\//);
+	assert.match(said.next, /five seconds/);
+});
+
+test('a local ref asked of a cloud tool is one sentence naming the tools that work locally', async () => {
+	const ops = operations({
+		localProject: (ref) => (ref === 'fswtzrhfa56yn' ? { folder: '/home/me/stacks/local-test' } : null),
+		listFunctions: async (ref) => ({ ref, local: '/home/me/stacks/local-test', functions: [] })
+	});
+	for (const name of ['list_products', 'usage', 'restore_window', 'pause_project']) {
+		const answer = await call(name, { ref: 'fswtzrhfa56yn' }, ops);
+		assert.ok(isError(answer), `${name} on a local ref was not refused`);
+		assert.ok(text(answer).includes('self-hosted project in /home/me/stacks/local-test'));
+		assert.match(text(answer), /get_connection_url/);
+	}
+	// The ones that work locally are passed through to the operations, which answer from the folder.
+	const listed = await call('list_functions', { ref: 'fswtzrhfa56yn' }, ops);
+	assert.ok(!isError(listed));
+	assert.match(text(listed), /local-test/);
+	// And a cloud ref is untouched by the gate.
+	assert.ok(!isError(await call('usage', { ref: 'b7kq2m9xt4rvz' }, ops)));
+});
