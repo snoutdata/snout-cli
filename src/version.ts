@@ -40,7 +40,8 @@ export function installKind(
 		script: process.argv[1] ?? ''
 	}
 ): InstallKind {
-	const exe = basename(facts.execPath).toLowerCase();
+	// Either separator: a Windows path is read on Linux in the tests, and basename() there splits on / only.
+	const exe = basename(facts.execPath.replace(/\\/g, '/')).toLowerCase();
 	if (facts.bun && exe.startsWith('snoutdata')) {
 		return 'binary';
 	}
