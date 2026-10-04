@@ -60,27 +60,13 @@ export const COMMANDS = [
 	{ name: 'db url', summary: 'A connection string', flags: ['--ref'] },
 	{ name: 'db psql', summary: 'Open psql, or run statements after --', flags: ['--ref'] },
 	{ name: 'db reset-password', summary: 'Rotate the project password', flags: ['--ref'] },
+	{ name: 'db access', summary: 'Who signs in to the database as themselves with OAuth (Postgres 18), at which level, as which role', flags: ['--ref'] },
+	{ name: 'db access grant', summary: 'Let a person sign in to the database as themselves, and print their connection string', flags: ['--ref', '--level'] },
+	{ name: 'db access revoke', summary: 'Take it away, by email or role; a token already issued can work until it expires (up to 1 hour)', flags: ['--ref'] },
 	{ name: 'db export', summary: 'Take or download a dump', flags: ['--ref', '--out', '--status', '--timeout'] },
 	{ name: 'db push', summary: 'Apply migrations from a folder', flags: ['--dir', '--dry-run', '--out-of-order'] },
 	{ name: 'db restore', summary: 'Put a dump into a project, or rewind it to a moment into a new project', flags: ['--file', '--force', '--at', '--name', '--window', '--ref'] },
 	{ name: 'mcp', summary: 'Serve these operations as tools over stdio', flags: ['--allow-delete'] }
-] as const;
-
-/**
- * Commands that work but are not LISTED: not in `USAGE`, not in `--help --json`, not offered over
- * MCP. Database sign-in with OAuth (docs/cloud/DB-OAUTH.md) is built and not switched on for
- * SnoutData Cloud: until `CLOUD_DB_OAUTH_ISSUER` is set, `cloud-project-db-access` refuses a grant
- * with 503 and nobody can sign in, so a release must not advertise it. `snoutdata db access …`
- * still runs (it is how we drive it before go-live), and answers "not switched on" honestly.
- *
- * At go-live these move back into `COMMANDS` (after `db reset-password`) and their lines go back
- * into `USAGE` in main.ts: docs/cloud/golive/README.md, "Switches". `flags.test.ts` checks
- * these as it checks the listed ones, so they cannot rot while hidden.
- */
-export const UNLISTED_COMMANDS = [
-	{ name: 'db access', summary: 'Who signs in to the database as themselves with OAuth (Postgres 18), at which level, as which role', flags: ['--ref'] },
-	{ name: 'db access grant', summary: 'Let a person sign in to the database as themselves, and print their connection string', flags: ['--ref', '--level'] },
-	{ name: 'db access revoke', summary: 'Take it away, by email or role; a token already issued can work until it expires (up to 1 hour)', flags: ['--ref'] }
 ] as const;
 
 /**
