@@ -137,10 +137,6 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata db url [--ref R]               print a connection string
   snoutdata db psql [--ref R] [-- ...]     open psql, with no password typed
   snoutdata db reset-password [--ref R]
-  snoutdata db access [list] [--ref R]     who signs in to the database as themselves
-                                           (OAuth, Postgres 18), and as which role
-  snoutdata db access grant EMAIL [--level full|read]   a teammate, or you; read by default
-  snoutdata db access revoke EMAIL|ROLE    take it away
   snoutdata db export [--ref R] [--out FILE]   take a copy, and download it
   snoutdata db export --status [--ref R]       what the last copy is doing
   snoutdata db push [--dir migrations] [--dry-run]   run the .sql files, once each

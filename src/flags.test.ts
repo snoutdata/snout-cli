@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { COMMANDS, flagHelp } from './catalogue.js';
+import { COMMANDS, UNLISTED_COMMANDS, flagHelp } from './catalogue.js';
 import { parseArgs } from './args.js';
 
 /**
@@ -17,7 +17,7 @@ import { parseArgs } from './args.js';
  * asserted is that the parser accepted it, which is the whole of what was broken.
  */
 describe('every documented flag parses', () => {
-	for (const command of COMMANDS) {
+	for (const command of [...COMMANDS, ...UNLISTED_COMMANDS]) {
 		for (const flag of command.flags) {
 			test(`${command.name} ${flag}`, () => {
 				const words = command.name.split(' ');
@@ -44,11 +44,26 @@ function attempt(argv: readonly string[]): string | null {
 }
 
 describe('every documented flag says what it does', () => {
-	for (const command of COMMANDS) {
+	for (const command of [...COMMANDS, ...UNLISTED_COMMANDS]) {
 		for (const flag of command.flags) {
 			test(`${command.name} ${flag}`, () => {
 				assert.ok(flagHelp(command.name, flag).length > 0, `${command.name} documents ${flag} with no line in FLAG_HELP`);
 			});
 		}
 	}
+});
+
+/**
+ * Database sign-in is built and not switched on (docs/cloud/DB-OAUTH.md): nothing the CLI lists
+ * may offer it until it is. At go-live this test goes with the move back into COMMANDS.
+ */
+describe('database sign-in is not listed before it is switched on', () => {
+	test('no listed command is a db access command', () => {
+		assert.deepEqual(COMMANDS.filter((one) => one.name.startsWith('db access')).map((one) => one.name), []);
+	});
+	test('and every unlisted one still parses', () => {
+		for (const one of UNLISTED_COMMANDS) {
+			assert.equal(attempt(one.name.split(' ')), null, `${one.name} no longer parses`);
+		}
+	});
 });
