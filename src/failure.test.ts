@@ -144,6 +144,9 @@ test('asking for help is not an error, and answers in JSON when asked to', { ski
 	for (const expected of ['init', 'db push', 'db export', 'usage', 'mcp']) {
 		assert.ok(names.includes(expected), `${expected} is missing from the machine-readable help`);
 	}
+	// Database sign-in is built and not switched on (docs/cloud/DB-OAUTH.md): no help offers it yet.
+	assert.doesNotMatch(plain.stdout, /db access/, 'the help offers database sign-in before it is switched on');
+	assert.ok(!names.some((name) => name.startsWith('db access')), 'the machine-readable help offers database sign-in before it is switched on');
 });
 
 test('running with no arguments at all is still a usage error', { skip: built ? false : 'run npm test, which builds first' }, () => {
