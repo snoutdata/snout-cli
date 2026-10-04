@@ -32,6 +32,7 @@ import * as keys from './commands/keys.js';
 import * as functions from './commands/functions.js';
 import * as secrets from './commands/secrets.js';
 import * as db from './commands/db.js';
+import { accessCommand } from './commands/dbAccess.js';
 import * as manage from './commands/manage.js';
 import * as realtime from './commands/realtime.js';
 import { authCommand } from './commands/auth.js';
@@ -136,6 +137,10 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata db url [--ref R]               print a connection string
   snoutdata db psql [--ref R] [-- ...]     open psql, with no password typed
   snoutdata db reset-password [--ref R]
+  snoutdata db access [list] [--ref R]     who signs in to the database as themselves
+                                           (OAuth, Postgres 18), and as which role
+  snoutdata db access grant EMAIL [--level full|read]   a teammate, or you; read by default
+  snoutdata db access revoke EMAIL|ROLE    take it away
   snoutdata db export [--ref R] [--out FILE]   take a copy, and download it
   snoutdata db export --status [--ref R]       what the last copy is doing
   snoutdata db push [--dir migrations] [--dry-run]   run the .sql files, once each
@@ -624,6 +629,10 @@ async function run(args: ParsedArgs): Promise<number> {
 				case 'reset-password':
 					await projects.resetPassword(ref());
 					return 0;
+				case 'access':
+					// Who may sign in to the database as themselves, with OAuth (Postgres 18).
+					await accessCommand(ref(), rest, { level: flagString(args, 'level') });
+					return 0;
 				case 'push':
 					// --dry-run is its own flag rather than the absence of a --yes, because
 					// the safe thing has to be the thing that is easy to type and this
@@ -661,7 +670,7 @@ async function run(args: ParsedArgs): Promise<number> {
 					throw new UsageError(
 						action
 							? `unknown command: db ${action}`
-							: 'db needs an action: url, psql, reset-password, export, push, restore'
+							: 'db needs an action: url, psql, reset-password, access, export, push, restore'
 					);
 			}
 		}
