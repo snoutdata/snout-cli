@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { COMMANDS } from './catalogue.js';
+import { COMMANDS, flagHelp } from './catalogue.js';
 import { parseArgs } from './args.js';
 
 /**
@@ -42,3 +42,13 @@ function attempt(argv: readonly string[]): string | null {
 		return error instanceof Error ? error.message : String(error);
 	}
 }
+
+describe('every documented flag says what it does', () => {
+	for (const command of COMMANDS) {
+		for (const flag of command.flags) {
+			test(`${command.name} ${flag}`, () => {
+				assert.ok(flagHelp(command.name, flag).length > 0, `${command.name} documents ${flag} with no line in FLAG_HELP`);
+			});
+		}
+	}
+});

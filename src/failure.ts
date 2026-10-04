@@ -49,6 +49,9 @@ export type FailureCode =
 	| 'tool-missing'
 	/** The server failed. Ours to fix, not the caller's. Retryable, with a delay. */
 	| 'server'
+	/** This version of the CLI is no longer served. Retrying changes nothing; `snoutdata
+	 *  upgrade` does. */
+	| 'outdated'
 	/** The operation ran and did not succeed, and none of the above describes it. */
 	| 'failed';
 
@@ -70,6 +73,7 @@ export const EXIT: Record<FailureCode | 'ok', number> = {
 	quota: 8,
 	network: 9,
 	timeout: 10,
+	outdated: 11,
 	// 127 is the shell's own convention for "command not found", and somebody reading a CI
 	// log knows it on sight. Worth more than a number of ours in sequence.
 	'tool-missing': 127,
@@ -131,6 +135,11 @@ export function codeForStatus(status: number): FailureCode {
 	}
 	if (status === 504) {
 		return 'timeout';
+	}
+	// 410 is how the control plane (and the hosted bridge before it) refuses a CLI it no
+	// longer serves. It exited 1 for a year, which is the one code that says nothing.
+	if (status === 410) {
+		return 'outdated';
 	}
 	if (status >= 500) {
 		return 'server';

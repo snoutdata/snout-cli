@@ -46,6 +46,7 @@ This CLI is built to be driven by a program. The contract, which every command h
 | `8` | Over a quota | The plan's limit. Do not retry. |
 | `9` | Network | Retry. |
 | `10` | Timed out | Retry, or raise `--timeout`. |
+| `11` | This CLI is out of date | `snoutdata upgrade`, then retry. The message names the version required. |
 | `127` | A tool this command needs is not installed | The message names it. The shell’s own convention, so a CI log reads right. |
 
 ### Credentials, without a browser
@@ -59,7 +60,7 @@ export SNOUTDATA_ACCESS_TOKEN=sdt_...   # made once by a person: snoutdata token
 CI and an agent
 should use: a script's behaviour should not depend on who happens to be logged in on the machine
 it runs on. Failing that, `~/.snoutdata/auth.json` (written by `snoutdata login`, mode 0600),
-whose session lasts an hour.
+whose session renews itself as it is used.
 
 The token is exchanged for a short-lived session by the control plane, so row-level security is
 still the only thing deciding what it can see.

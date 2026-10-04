@@ -48,6 +48,8 @@ export async function create(options: {
 	teamId?: string | undefined;
 	/** How long to wait for it to start, when waiting. Default five minutes. */
 	timeoutMs?: number | undefined;
+	/** Print the connection string, password and all. Off by default (see below). */
+	showUrl?: boolean | undefined;
 }): Promise<void> {
 	const created = await call<{ project: Project; password: string }>('cloud-project-create', {
 		name: options.name,
@@ -77,22 +79,31 @@ export async function create(options: {
 		writeLink(options.link, { ref, name: project.name });
 	}
 
+	// The connection string carries the password, so it is NOT printed by default. stdout is
+	// what lands in an agent's transcript, a CI log and a terminal recording, and a create
+	// printed `postgres://owner:PASSWORD@…` into all three until 0.10.2. The password is stored
+	// for the owner either way: `snoutdata db url` prints it when it is actually wanted, and
+	// `--show-url` restores the old output for a script that read it from here.
+	const uri = `postgres://${project.user}:${encodeURIComponent(created.password)}@${project.host}:5432/${project.database}?sslmode=require`;
 	emit(
 		{
 			project,
-			// The one time a create's password is shown. `cloud-project-connection` gives
-			// it back to the owner any time, so this is convenience rather than a
-			// last chance — and saying so is better than implying otherwise.
-			password: created.password,
-			uri: `postgres://${project.user}:${encodeURIComponent(created.password)}@${project.host}:5432/${project.database}?sslmode=require`
+			ref,
+			host: project.host,
+			database: project.database,
+			user: project.user,
+			...(options.showUrl ? { password: created.password, uri } : { connectionString: 'snoutdata db url' })
 		},
 		() => {
-			process.stdout.write(
-				`postgres://${project.user}:${encodeURIComponent(created.password)}@${project.host}:5432/${project.database}?sslmode=require\n`
-			);
+			// The answer on stdout is the ref, which is what the next command needs.
+			process.stdout.write(`${options.showUrl ? uri : ref}\n`);
 			say('');
-			say(`Ready. ${bold(ref)} in ${project.region}.`);
-			say('The password is stored for you: `snoutdata db url` prints this again.');
+			say(`Ready. ${bold(ref)} in ${project.region}, at ${project.host}.`);
+			say(
+				options.showUrl
+					? 'The password is stored for you: `snoutdata db url` prints this again.'
+					: '`snoutdata db url` prints the connection string (it holds the password, so it is not shown here).'
+			);
 		}
 	);
 }
