@@ -261,7 +261,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'set_product',
-		description: 'Turn auth, storage or data-api on or off for a project. It starts within about a minute. The data API is on paid plans only, and a free project is refused in words.',
+		description: 'Turn auth, storage or data-api on or off for a project. It starts within about a minute. All three are on every plan, including free.',
 		inputSchema: object({ ref: STRING, product: { type: 'string', enum: ['auth', 'storage', 'data-api'] }, enabled: { type: 'boolean' } }, ['ref', 'product', 'enabled'])
 	},
 	{

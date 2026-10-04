@@ -96,7 +96,7 @@ export async function productsCommand(ref: string): Promise<void> {
 			['PRODUCT', 'STATE', ''],
 			line('auth', answer.auth),
 			line('storage', storage, 'pending' in storage && storage.pending ? 'waiting for the host' : ''),
-			line('data-api', dataApi, 'allowedOnPlan' in dataApi && !dataApi.allowedOnPlan ? 'paid plans only' : ''),
+			line('data-api', dataApi, 'allowedOnPlan' in dataApi && !dataApi.allowedOnPlan ? 'not on this plan' : ''),
 			line('push', answer.push, 'scheduling' in answer.push && answer.push.enabled && !answer.push.scheduling ? 'scheduled sends on paid plans' : ''),
 			line('realtime', answer.realtime, 'always on: broadcast, presence; table changes on Plus and Pro'),
 		])}\n`);
