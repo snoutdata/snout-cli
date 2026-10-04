@@ -91,7 +91,9 @@ const VALUED = new Set([
 	'email',
 	// `realtime inspect --channel C`, `realtime logs --channel C --since 10m`.
 	'channel',
-	'since'
+	'since',
+	// `db access grant EMAIL --level full|read`: what a person may do in the database.
+	'level'
 ]);
 
 

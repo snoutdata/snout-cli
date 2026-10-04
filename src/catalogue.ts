@@ -60,6 +60,9 @@ export const COMMANDS = [
 	{ name: 'db url', summary: 'A connection string', flags: ['--ref'] },
 	{ name: 'db psql', summary: 'Open psql, or run statements after --', flags: ['--ref'] },
 	{ name: 'db reset-password', summary: 'Rotate the project password', flags: ['--ref'] },
+	{ name: 'db access', summary: 'Who signs in to the database as themselves with OAuth (Postgres 18), at which level, as which role', flags: ['--ref'] },
+	{ name: 'db access grant', summary: 'Let a person sign in to the database as themselves, and print their connection string', flags: ['--ref', '--level'] },
+	{ name: 'db access revoke', summary: 'Take it away, by email or role; a token already issued can work until it expires (up to 1 hour)', flags: ['--ref'] },
 	{ name: 'db export', summary: 'Take or download a dump', flags: ['--ref', '--out', '--status', '--timeout'] },
 	{ name: 'db push', summary: 'Apply migrations from a folder', flags: ['--dir', '--dry-run', '--out-of-order'] },
 	{ name: 'db restore', summary: 'Put a dump into a project, or rewind it to a moment into a new project', flags: ['--file', '--force', '--at', '--name', '--window', '--ref'] },
@@ -135,7 +138,8 @@ const FLAG_HELP: Record<string, string> = {
 	'--allow-delete': 'Let the agent\'s delete_project actually delete',
 	'--channel': 'Only this channel',
 	'--since': 'How far back, like 10m, 2h or 1d (default 1h)',
-	'--watch': 'Keep printing what changes until interrupted'
+	'--watch': 'Keep printing what changes until interrupted',
+	'--level': 'full (everything the project password can do) or read (reads every table, writes nothing). Default read'
 };
 
 export function flagHelp(command: string, flag: string): string {
