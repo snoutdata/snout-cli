@@ -153,7 +153,7 @@ const FLAG_HELP: Record<string, string> = {
 	'--channel': 'Only this channel',
 	'--since': 'How far back, like 10m, 2h or 1d (default 1h)',
 	'--watch': 'Keep printing what changes until interrupted',
-	'--level': 'full (everything the project password can do) or read (reads every table, writes nothing). Default read'
+	'--level': "full (everything the project password can do) or read (reads the project's own tables, never the auth or storage schemas, and writes nothing). Default read"
 };
 
 export function flagHelp(command: string, flag: string): string {
