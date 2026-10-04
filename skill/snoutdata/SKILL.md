@@ -57,7 +57,7 @@ in this folder or a parent. `init` writes that file.
 | Rewind to a moment, into a NEW project beside it | `npx snoutdata db restore --at 2026-09-20T14:30:00Z --json` |
 | Load a dump into a project | `npx snoutdata db restore --file backup.dump --json` |
 | Auth, storage, data API: on or off | `npx snoutdata products --json` |
-| Turn one on (data API: paid plans) | `npx snoutdata products enable auth\|storage\|data-api --json` |
+| Turn one on (every plan, including free) | `npx snoutdata products enable auth\|storage\|data-api --json` |
 | Auth settings, and the callback to register with Google | `npx snoutdata auth --json` |
 | Sign in with Google (the user's own OAuth client; secret on stdin) | `… \| npx snoutdata auth google --client-id ID --stdin --json` |
 | Site URL and allowed redirect addresses | `npx snoutdata auth redirects --site-url URL --allow URL,URL --json` |
@@ -84,7 +84,7 @@ without asking. `delete_project` refuses unless the server was started with `--a
 ## When something is refused
 
 A refusal is a sentence from the control plane: report it to the user in those words instead of
-working around it. Common ones: the plan's project limit (exit 8), the data API or custom domains
+working around it. Common ones: the plan's project limit (exit 8), custom domains
 on a free plan, a production project refusing a pause, a project over its storage limit being
 read-only (check `usage`).
 
