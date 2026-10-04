@@ -122,6 +122,9 @@ snoutdata teams
 snoutdata db url [--ref R]                        # a connection string
 snoutdata db psql [--ref R] [-- ...]              # opens psql, no password typed
 snoutdata db reset-password [--ref R]
+snoutdata db access [--ref R]                     # who signs in as themselves (Postgres 18)
+snoutdata db access grant EMAIL [--level full|read]   # prints their connection string
+snoutdata db access revoke EMAIL|ROLE
 snoutdata db export [--ref R] [--out FILE]        # take a dump and download it
 snoutdata db push [--dir migrations] [--dry-run]  # run the .sql files, once each
 snoutdata db restore --file DUMP [--force]

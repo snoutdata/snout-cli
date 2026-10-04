@@ -25,6 +25,9 @@ Everything is driven by one CLI. Nothing needs installing: every command below c
   `printf %s "$VALUE" | npx snoutdata secrets set NAME --stdin`.
 - Destructive commands (`projects delete`, `keys rotate`, `db restore --file` over data) need the
   user's explicit go-ahead. Ask first.
+- **Giving database access hands a person the database.** `db access grant` and `db access revoke`
+  need the user's explicit go-ahead, with the address and level said back to them first. You cannot
+  sign in that way yourself: the person approves in a browser.
 
 ## Credentials
 
@@ -56,6 +59,8 @@ in this folder or a parent. `init` writes that file.
 | How far back a point-in-time restore can go | `npx snoutdata db restore --window --json` |
 | Rewind to a moment, into a NEW project beside it | `npx snoutdata db restore --at 2026-09-20T14:30:00Z --json` |
 | Load a dump into a project | `npx snoutdata db restore --file backup.dump --json` |
+| Let a person open the database as themselves, with their SnoutData account (Postgres 18; they approve in a browser) | `npx snoutdata db access grant EMAIL --level read\|full --json` |
+| Who has database access, and take it away | `npx snoutdata db access --json`, `npx snoutdata db access revoke EMAIL --json` |
 | Auth, storage, data API: on or off | `npx snoutdata products --json` |
 | Turn one on (every plan, including free) | `npx snoutdata products enable auth\|storage\|data-api --json` |
 | Auth settings, and the callback to register with Google | `npx snoutdata auth --json` |
@@ -73,6 +78,15 @@ in this folder or a parent. `init` writes that file.
 The project API is `https://<ref>.api.snoutdata.com` (`/rest/v1`, `/graphql/v1`, `/auth/v1`,
 `/storage/v1`, `/functions/v1/<name>`). The `service_role` key bypasses row-level security: keep it
 on a server, never in client code.
+
+Database sign-in (Postgres 18 projects): `read` reads the project's own tables (including rows
+row-level security would hide) and writes nothing, and never the `auth`, `storage` or internal
+schemas; `full` is everything the project password can do. The person connects with psql 18 plus
+`libpq-oauth`, using the connection string `grant` prints (it holds `oauth_issuer` and
+`oauth_client_id`, and no password), and approves the code psql prints at
+https://dashboard.snoutdata.com/#/db-device. Other drivers (node-postgres, JDBC) cannot sign in this
+way yet: give them `db url`. A project on Postgres 17 is refused with a sentence; report it as is,
+and never suggest deleting or remaking the project.
 
 ## As an MCP server
 
