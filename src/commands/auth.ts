@@ -6,6 +6,7 @@
  *   snoutdata auth                                   what is set
  *   snoutdata auth google --client-id ID --stdin     Google on; the client secret from a pipe
  *   snoutdata auth google off                        Google off
+ *   snoutdata auth anonymous on|off                  guest sign-in (signInAnonymously)
  *   snoutdata auth redirects --site-url URL --allow URL,URL
  *   snoutdata auth templates                         the five emails, ours or yours
  *   snoutdata auth template KIND --file body.html [--subject S] | reset
@@ -29,12 +30,15 @@ export interface AuthSettings {
 	google: { enabled: boolean; clientId: string | null; clientSecretSet: boolean; ready: boolean };
 	/** What the customer adds to their Google client's Authorized redirect URIs. */
 	googleCallback: string;
+	/** Guest sign-in: `enabled` is the switch, `ready` is what the auth service was given. */
+	anonymous: { enabled: boolean; ready: boolean };
 }
 
 interface Status {
 	enabled?: boolean;
 	settings?: { site_url?: string | null; uri_allow_list?: string[] | null } | null;
 	google?: { enabled?: boolean; clientId?: string | null; clientSecretSet?: boolean; ready?: boolean };
+	anonymous?: { enabled?: boolean; ready?: boolean };
 }
 
 function shape(ref: string, status: Status): AuthSettings {
@@ -50,6 +54,10 @@ function shape(ref: string, status: Status): AuthSettings {
 			ready: status.google?.ready === true,
 		},
 		googleCallback: `https://${ref}.${API_DOMAIN}/auth/v1/callback`,
+		anonymous: {
+			enabled: status.anonymous?.enabled === true,
+			ready: status.anonymous?.ready === true,
+		},
 	};
 }
 
@@ -76,6 +84,7 @@ function print(settings: AuthSettings): void {
 		['google', googleWord],
 		['google client id', google.clientId ?? dim('not set')],
 		['google callback', settings.googleCallback],
+		['guests', settings.anonymous.ready ? bold('on') : settings.anonymous.enabled ? 'switched on, not applied yet' : 'off'],
 	])}\n`);
 	if (!settings.enabled) {
 		say(dim(`  snoutdata products enable auth --ref ${settings.ref}`));
@@ -132,6 +141,24 @@ export async function authCommand(
 		});
 		return;
 	}
+	if (action === 'anonymous' || action === 'guests') {
+		const word = rest[0];
+		if (word !== 'on' && word !== 'off') {
+			throw new UsageError('auth anonymous takes "on" or "off"');
+		}
+		const settings = await setAuth(ref, { anonymousEnabled: word === 'on' });
+		emit(settings, () => {
+			if (word === 'off') {
+				say('Guest sign-in is off. Guests who already have a session keep it until it ends. Your auth service restarts within about a minute.');
+			} else if (settings.enabled) {
+				say('Guest sign-in is on: signInAnonymously() gives a browser a session with no email or password. Your auth service restarts within about a minute.');
+			} else {
+				say('Guest sign-in is switched on, and takes effect when auth is.');
+				say(dim(`  snoutdata products enable auth --ref ${settings.ref}`));
+			}
+		});
+		return;
+	}
 	if (action === 'redirects') {
 		const values: Record<string, unknown> = {};
 		if (flags.siteUrl !== undefined) {
@@ -176,7 +203,7 @@ export async function authCommand(
 		});
 		return;
 	}
-	throw new UsageError(`unknown command: auth ${action}. auth [google [off] | redirects | templates | template KIND]`);
+	throw new UsageError(`unknown command: auth ${action}. auth [google [off] | anonymous on|off | redirects | templates | template KIND]`);
 }
 
 // --- email templates (084) ------------------------------------------------------------------
