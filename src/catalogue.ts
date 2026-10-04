@@ -74,7 +74,7 @@ export const COMMANDS = [
  * still runs (it is how we drive it before go-live), and answers "not switched on" honestly.
  *
  * At go-live these move back into `COMMANDS` (after `db reset-password`) and their lines go back
- * into `USAGE` in main.ts: docs/cloud/DB-OAUTH-GOLIVE-COPY.md, "Switches". `flags.test.ts` checks
+ * into `USAGE` in main.ts: docs/cloud/golive/README.md, "Switches". `flags.test.ts` checks
  * these as it checks the listed ones, so they cannot rot while hidden.
  */
 export const UNLISTED_COMMANDS = [
