@@ -24,6 +24,12 @@ export interface Products {
 	storage: { enabled: boolean; pending: boolean; bytes: number | null; files: number | null } | { error: string };
 	dataApi: { enabled: boolean; allowedOnPlan: boolean } | { error: string };
 	push: { enabled: boolean; scheduling: boolean } | { error: string };
+	/**
+	 * Realtime has no switch: broadcast and presence are on for every project from the moment it
+	 * exists. It is listed anyway, because a list of products that leaves it out reads as "nothing
+	 * is on" to somebody whose game is using it right now.
+	 */
+	realtime: { enabled: true; broadcast: true; presence: true; tableChanges: string };
 }
 
 function reason(error: unknown): { error: string } {
@@ -42,8 +48,10 @@ export async function getProducts(ref: string): Promise<Products> {
 		api.call<{ push?: { enabled: boolean; scheduling: boolean } }>('cloud-project-push', { ref })
 			.then((a) => ({ enabled: a.push?.enabled === true, scheduling: a.push?.scheduling === true }), reason),
 	]);
-	return { ref, auth, storage, dataApi, push };
+	return { ref, auth, storage, dataApi, push, realtime: REALTIME };
 }
+
+const REALTIME = { enabled: true, broadcast: true, presence: true, tableChanges: 'Plus and Pro plans' } as const;
 
 export function parseProduct(word: string | undefined): Product {
 	const product = (word ?? '').toLowerCase().replace('_', '-').replace(/^dataapi$/, 'data-api');
@@ -90,6 +98,7 @@ export async function productsCommand(ref: string): Promise<void> {
 			line('storage', storage, 'pending' in storage && storage.pending ? 'waiting for the host' : ''),
 			line('data-api', dataApi, 'allowedOnPlan' in dataApi && !dataApi.allowedOnPlan ? 'paid plans only' : ''),
 			line('push', answer.push, 'scheduling' in answer.push && answer.push.enabled && !answer.push.scheduling ? 'scheduled sends on paid plans' : ''),
+			line('realtime', answer.realtime, 'always on: broadcast, presence; table changes on Plus and Pro'),
 		])}\n`);
 		// The hint names a product that is actually OFF, or nothing: it used to say "enable
 		// storage" on a project where all four were already on.
@@ -257,6 +266,7 @@ export async function showCommand(ref: string): Promise<void> {
 			['state', p.state],
 			['region', p.region],
 			['auth / storage / data-api / push', `${on(p.products.auth)} / ${on(p.products.storage)} / ${on(p.products.dataApi)} / ${on(p.products.push)}`],
+			['realtime', 'on (broadcast and presence; table changes on Plus and Pro)'],
 			['functions', list(p.functions)],
 			['secrets', list(p.secretNames)],
 			['domains', list(p.domains)],

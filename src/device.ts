@@ -17,8 +17,9 @@
  * plane hands the token over exactly once.
  */
 
-import { ACCOUNTS_URL, ANON_KEY } from './api.js';
+import { ACCOUNTS_URL, ANON_KEY, noticeFrom, outdated } from './api.js';
 import { fail } from './failure.js';
+import { CLIENT_INFO } from './version.js';
 
 export interface DeviceStart {
 	code: string;
@@ -37,10 +38,17 @@ export type DevicePoll =
 async function post<T>(fn: string, body: unknown): Promise<{ status: number; body: T }> {
 	const response = await fetch(`${ACCOUNTS_URL}/functions/v1/${fn}`, {
 		method: 'POST',
-		headers: { apikey: ANON_KEY, 'Content-Type': 'application/json' },
+		headers: { apikey: ANON_KEY, 'Content-Type': 'application/json', 'x-client-info': CLIENT_INFO },
 		body: JSON.stringify(body)
 	});
+	noticeFrom(response);
 	const parsed = (await response.json().catch(() => ({}))) as T;
+	// Signing in is the first thing an old CLI does, so it is where a refusal is most likely to
+	// land. 0.3.0 met it here and exited 1 with no way forward.
+	if (response.status === 410) {
+		const error = (parsed as { error?: unknown }).error;
+		throw outdated(response, typeof error === 'string' ? error : 'This version of the snoutdata CLI is no longer supported.');
+	}
 	return { status: response.status, body: parsed };
 }
 

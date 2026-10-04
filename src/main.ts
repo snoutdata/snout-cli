@@ -33,6 +33,7 @@ import * as functions from './commands/functions.js';
 import * as secrets from './commands/secrets.js';
 import * as db from './commands/db.js';
 import * as manage from './commands/manage.js';
+import * as realtime from './commands/realtime.js';
 import { authCommand } from './commands/auth.js';
 import { push } from './commands/push.js';
 import * as notifications from './commands/notifications.js';
@@ -42,18 +43,25 @@ import { serve as serveMcp } from './commands/mcp.js';
 import { findStack, type LocalStack } from './local.js';
 import { usage } from './commands/usage.js';
 
+import { upgrade } from './commands/upgrade.js';
+import { expecting, sameEmail } from './commands/login.js';
+import { flagHelp } from './catalogue.js';
+import { readAuth } from './config.js';
 // Injected by build.mjs from package.json, because a hand-maintained copy of the version
 // drifts and did: 0.1.1 was published reporting 0.1.0 in --version, --help and the MCP
 // serverInfo, which is the one number an agent has to be able to trust. `typeof` on an
 // undeclared identifier does not throw, so the tsc build that the tests run against gets
-// "dev" rather than a ReferenceError.
-declare const __SNOUTDATA_VERSION__: string | undefined;
-const VERSION = typeof __SNOUTDATA_VERSION__ === 'string' ? __SNOUTDATA_VERSION__ : 'dev';
+// "dev" rather than a ReferenceError. It lives in version.ts, beside how the CLI was installed.
+import { VERSION } from './version.js';
 
 const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an agent
 
-  snoutdata init [--name X] [--env]        a database for this folder, linked, ready to use
+  snoutdata init [--name X] [--env]        a database for this folder, linked, ready to use;
+                                           --env writes DATABASE_URL into ./.env (and adds
+                                           .env to .gitignore) instead of printing it
   snoutdata login [--provider github]      sign in through a browser
+  snoutdata login --email you@x.com        sign in as that account: the browser offers it,
+                                           and a different account is reported at once
   snoutdata login --sso [--domain D]       sign in with your company's identity provider;
                                            D is a work email or a domain, and it is asked
                                            for when not given. Only the domain is sent
@@ -61,20 +69,24 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata login --no-browser             print the URL instead of opening one
   snoutdata logout
   snoutdata whoami
+  snoutdata upgrade [--check]              install the newest CLI, the way this one was
 
   snoutdata tokens create --name ci [--expires DAYS] [--project REF]   a credential for CI, shown once
   snoutdata tokens list
   snoutdata tokens revoke <id|sdt_prefix>
 
   snoutdata projects list
-  snoutdata projects create --name X [--region R] [--no-wait]
+  snoutdata projects create --name X [--region R] [--no-wait] [--show-url]
+                                           prints the ref; the connection string (it holds
+                                           the password) only with --show-url, or from db url
   snoutdata projects pause|resume|delete [--ref R] [--no-wait]
   snoutdata link --ref R                   write .snoutdata/project.json here
   snoutdata link --local [NAME|FOLDER]     use a local project (Studio's, or a snout-stack folder) here
 
   snoutdata projects show [--ref R]        one project: state, products, functions, domains
 
-  snoutdata products [--ref R]             auth, storage, the data API and push: on or off
+  snoutdata products [--ref R]             auth, storage, the data API and push: on or off;
+                                           Realtime is always on (shown, not switched)
   snoutdata products enable|disable auth|storage|data-api|push [--ref R]
   snoutdata push credentials [--ref R]     push keys: what is set (never the keys)
   snoutdata push credentials set apns --p8 FILE --key-id ID --team-id ID --topic BUNDLE [--environment E]
@@ -83,9 +95,15 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata auth [--ref R]                 Google sign-in and redirect addresses
   … | snoutdata auth google --client-id ID --stdin   your own Google client; secret on stdin
   snoutdata auth google off
+  snoutdata auth anonymous on|off          guest sign-in: signInAnonymously(), no email or password
   snoutdata auth redirects --site-url URL --allow URL,URL
   snoutdata auth templates                 the five auth emails, ours or yours
   snoutdata auth template KIND --file body.html [--subject S] | reset
+
+  snoutdata realtime inspect [--channel C] [--watch] [--ref R]
+                                           channels open now: who, their presence, the last minute
+  snoutdata realtime logs [--since 10m] [--channel C] [--ref R]
+                                           connects, joins, leaves and disconnects, with why
 
   snoutdata domains [--ref R]              your own domains in front of the project's API
   snoutdata domains add|verify|remove <hostname> [--ref R]
@@ -132,7 +150,9 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
 Every command takes --json, --quiet and --help, and anything that waits takes --timeout
 SECONDS. A failure in --json mode is {"ok":false,"code","error"} on stdout, and the exit
 code says the same thing more coarsely: 2 the command was wrong, 3 the credential, 4 not
-ready yet, 5 forbidden, 6 not found, 7 conflict, 8 quota, 9 network, 10 timed out.
+ready yet, 5 forbidden, 6 not found, 7 conflict, 8 quota, 9 network, 10 timed out, 11 this
+CLI is out of date ("code":"outdated", run "snoutdata upgrade"). "<command> --help"
+explains each of a command's flags.
 
 With no credential and a person present, sign-in is offered: SnoutData Studio if it is
 running here, then a pairing code. With no person (not a terminal, --json, CI, or
@@ -140,8 +160,8 @@ SNOUTDATA_NO_INTERACTIVE) nothing is asked and it exits 3 at once.
 
 A project comes from --ref, then SNOUTDATA_PROJECT, then
 .snoutdata/project.json in this folder or a parent. A token comes from
-SNOUTDATA_ACCESS_TOKEN, then ~/.snoutdata/auth.json. The session that login writes lasts
-an hour, so CI wants "tokens create", which does not expire.
+SNOUTDATA_ACCESS_TOKEN, then ~/.snoutdata/auth.json. The session that login writes renews
+itself as it is used; CI, which has no browser to sign in with, wants "tokens create".
 
 Docs: https://docs.snoutdata.com/developers/cli
 Examples: https://github.com/snoutdata/snoutdata (a star helps other people find it)
@@ -164,10 +184,16 @@ async function run(args: ParsedArgs): Promise<number> {
 	if (flagBoolean(args, 'help') && group && group !== 'help') {
 		const matching = COMMANDS.filter((one) => one.name === group || one.name.startsWith(`${group} `));
 		if (matching.length > 0) {
-			emit({ commands: matching }, () => {
+			emit({ commands: matching.map((one) => ({ ...one, flagHelp: Object.fromEntries(one.flags.map((flag) => [flag, flagHelp(one.name, flag)])) })) }, () => {
 				for (const one of matching) {
 					const flags = one.flags.length > 0 ? ` ${one.flags.join(' ')}` : '';
 					process.stdout.write(`  snoutdata ${one.name}${flags}\n      ${one.summary}\n`);
+					// One line per flag. A list of bare names told nobody where `init --env` writes,
+					// or that it writes a password into a file.
+					const width = Math.max(0, ...one.flags.map((flag) => flag.length));
+					for (const flag of one.flags) {
+						process.stdout.write(`        ${flag.padEnd(width)}  ${flagHelp(one.name, flag)}\n`);
+					}
 				}
 				process.stdout.write(`\n  Every command also takes --json, --quiet and --help.\n`);
 			});
@@ -232,7 +258,13 @@ async function run(args: ParsedArgs): Promise<number> {
 					expiresAt: started.expiresAt
 				});
 				writeAuth({ accessToken: approved.token });
-				emit({ ok: true, name: approved.name ?? null }, () => say('Signed in.'));
+				// A pairing token carries no email, so whose it is has to be asked.
+				const email = flagString(args, 'email');
+				const signedInAs = email ? ((await whoami()).email ?? undefined) : undefined;
+				if (email) {
+					expecting(email, { accessToken: approved.token, email: signedInAs });
+				}
+				emit({ ok: true, name: approved.name ?? null, email: signedInAs ?? null }, () => say(`Signed in${signedInAs ? ` as ${signedInAs}` : ''}.`));
 				return 0;
 			}
 			// `--domain` on its own means SSO: it is the only thing that flag is for, and
@@ -257,7 +289,8 @@ async function run(args: ParsedArgs): Promise<number> {
 				sso,
 				domain,
 				noBrowser: flagBoolean(args, 'no-browser') || !canAsk(),
-				timeoutMs: timeoutMs()
+				timeoutMs: timeoutMs(),
+				email: flagString(args, 'email')
 			});
 			emit({ email: result.email ?? null }, () => say(`Signed in${result.email ? ` as ${result.email}` : ''}.`));
 			return 0;
@@ -279,7 +312,14 @@ async function run(args: ParsedArgs): Promise<number> {
 		}
 		case 'whoami': {
 			const me = await whoami();
-			emit(me, () => {
+			// `login --email` said whose session this should be. Say so when it is not, every
+			// time, since the next command acts as whoever this is.
+			const expected = readAuth()?.expectedEmail;
+			const mismatch = Boolean(expected && me.email && !sameEmail(expected, me.email));
+			if (mismatch) {
+				warn(`This session is ${me.email}, and login asked for ${expected}. Run "snoutdata login --email ${expected}" to sign in as that account.`);
+			}
+			emit({ ...me, ...(expected ? { expectedEmail: expected, matchesExpected: !mismatch } : {}) }, () => {
 				process.stdout.write(`${me.email ?? me.id}\n`);
 				if (me.token) {
 					say(
@@ -337,7 +377,8 @@ async function run(args: ParsedArgs): Promise<number> {
 						region: flagString(args, 'region'),
 						wait: !flagBoolean(args, 'no-wait'),
 						timeoutMs: timeoutMs(),
-						link: undefined
+						link: undefined,
+						showUrl: flagBoolean(args, 'show-url')
 					});
 					return 0;
 				}
@@ -532,6 +573,15 @@ async function run(args: ParsedArgs): Promise<number> {
 			});
 			return 0;
 		}
+		case 'realtime': {
+			if (action === undefined || action === 'inspect') {
+				return realtime.inspect(ref(), { channel: flagString(args, 'channel'), watch: flagBoolean(args, 'watch') });
+			}
+			if (action === 'logs') {
+				return realtime.logs(ref(), { channel: flagString(args, 'channel'), since: flagString(args, 'since') });
+			}
+			throw new UsageError(`unknown command: realtime ${action}. realtime inspect|logs`);
+		}
 		case 'domains': {
 			await manage.domainsCommand(ref(), action, rest[0]);
 			return 0;
@@ -666,6 +716,8 @@ async function run(args: ParsedArgs): Promise<number> {
 			return serveMcp({ version: VERSION, allowDelete: Boolean(args.flags['allow-delete']) });
 		case 'init':
 			return init(args);
+		case 'upgrade':
+			return upgrade({ check: flagBoolean(args, 'check') });
 		default:
 			throw new UsageError(`unknown command: ${group}`);
 	}
@@ -697,7 +749,10 @@ async function init(args: ParsedArgs): Promise<number> {
 		name,
 		region: flagString(args, 'region'),
 		wait: true,
-		link: process.cwd()
+		link: process.cwd(),
+		// `init` without --env exists to hand back a DATABASE_URL, so it prints one. With --env
+		// the URL goes into .env and nowhere else.
+		showUrl: !flagBoolean(args, 'env')
 	});
 
 	const ref = resolveRef({ cwd: process.cwd() });

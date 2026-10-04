@@ -84,15 +84,24 @@ const VALUED = new Set([
 	'key-id',
 	'team-id',
 	'topic',
-	'environment'
+	'environment',
+	// `login --email you@x.com`: the account to sign in as. A hint to the provider's chooser,
+	// and checked against the account that comes back, so a wrong click is said at once rather
+	// than discovered later. Never a password (see below).
+	'email',
+	// `realtime inspect --channel C`, `realtime logs --channel C --since 10m`.
+	'channel',
+	'since'
 ]);
 
 
 // Deliberately NOT here, having been accepted and silently ignored until 2026-09-06:
 //
-//   --email, --password   Nothing has ever read them, and a password on a command line is
+//   --password            Nothing has ever read it, and a password on a command line is
 //                         readable by every process on the machine through `ps` and lands
 //                         in the shell history. Sign in, or use SNOUTDATA_ACCESS_TOKEN.
+//                         (`--email` came back in 0.10.2 as `login`'s account hint, which
+//                         is not a credential.)
 //   --token               Same reason. The env var exists precisely so a credential is not
 //                         on argv.
 //   --project             SNOUTDATA_PROJECT and `link` already answer this, and `--ref` is
@@ -198,7 +207,14 @@ const KNOWN_BOOLEANS = new Set([
 	'no-migrations',
 	// `usage`: print the day-by-day table under the headline, which most callers do not
 	// want and --json always carries anyway.
-	'history'
+	'history',
+	// `projects create --show-url`: print the connection string, password and all. Off by
+	// default since 0.10.2, because stdout is what lands in transcripts and CI logs.
+	'show-url',
+	// `upgrade --check`: say whether a newer version exists, and install nothing.
+	'check',
+	// `realtime inspect --watch`: keep printing what changes.
+	'watch'
 ]);
 
 function splitFlag(arg: string): [string, string | undefined] {

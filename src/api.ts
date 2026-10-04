@@ -15,9 +15,8 @@ import { localConnection, localStackFor, type LocalStack } from './local.js';
 import { CliFailure } from './failure.js';
 import { explainNoHuman, noHumanReason } from './interactive.js';
 import { climb } from './ladder.js';
-
-declare const __SNOUTDATA_VERSION__: string | undefined;
-const CLIENT_INFO = `snoutdata-cli/${typeof __SNOUTDATA_VERSION__ === 'string' ? __SNOUTDATA_VERSION__ : 'dev'}`;
+import { warn } from './output.js';
+import { CLIENT_INFO, VERSION, outdatedAdvice } from './version.js';
 
 export const ACCOUNTS_URL = process.env.SNOUTDATA_ACCOUNTS_URL ?? 'https://accounts.snoutdata.com';
 export const ANON_KEY =
@@ -149,10 +148,10 @@ async function currentToken(): Promise<string> {
 		expires_at: number;
 	};
 	const next: StoredAuth = {
+		...auth,
 		accessToken: data.access_token,
 		refreshToken: data.refresh_token,
-		expiresAt: data.expires_at,
-		email: auth.email
+		expiresAt: data.expires_at
 	};
 	writeAuth(next);
 	return next.accessToken;
@@ -197,6 +196,7 @@ export async function call<T>(
 		},
 		body: method === 'GET' ? undefined : JSON.stringify(body)
 	});
+	noticeFrom(response);
 	const text = await response.text();
 	let parsed: unknown;
 	try {
@@ -215,9 +215,41 @@ export async function call<T>(
 		if (response.status === 401) {
 			throw new NotSignedIn(message);
 		}
+		if (response.status === 410) {
+			throw outdated(response, message);
+		}
 		throw new ApiError(response.status, message);
 	}
 	return parsed as T;
+}
+
+/**
+ * The control plane's word on this CLI's version, said once per run.
+ *
+ * Every response may carry `x-snoutdata-cli-notice` (a sentence) when this version is
+ * deprecated and still served. It goes to stderr, so `--json` stdout stays one value, and it is
+ * said on every command until the CLI is upgraded: a warning that appears once and then never
+ * again is how a refusal arrives as a surprise.
+ */
+let noticeShown = false;
+
+export function noticeFrom(response: Response): void {
+	const notice = response.headers.get('x-snoutdata-cli-notice');
+	if (!notice || noticeShown) {
+		return;
+	}
+	noticeShown = true;
+	warn(`${notice} ${outdatedAdvice({ minimum: response.headers.get('x-snoutdata-cli-minimum') })}`);
+}
+
+/** A 410: this version is no longer served. The server's words, then what to run about it. */
+export function outdated(response: Response, message: string): CliFailure {
+	const minimum = response.headers.get('x-snoutdata-cli-minimum');
+	return new CliFailure('outdated', `${message.replace(/\s+$/, '')} ${outdatedAdvice({ minimum })}`, {
+		status: 410,
+		installed: VERSION,
+		minimum: minimum ?? null
+	});
 }
 
 export interface Who {

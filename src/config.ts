@@ -28,6 +28,9 @@ export interface StoredAuth {
 	/** Seconds since the epoch, as the auth server reports it. */
 	readonly expiresAt?: number;
 	readonly email?: string;
+	/** The account `login --email` asked for. Kept so `whoami` can say when the session is
+	 *  somebody else's, which is the mistake a browser sign-in makes silently. */
+	readonly expectedEmail?: string;
 }
 
 export interface LinkedProject {

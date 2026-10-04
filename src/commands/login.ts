@@ -57,7 +57,7 @@ import { UsageError } from '../args.js';
 import { writeAuth } from '../config.js';
 import { CliFailure, codeForStatus } from '../failure.js';
 import { canAsk, explainNoHuman, noHumanReason } from '../interactive.js';
-import { bold, say } from '../output.js';
+import { bold, say, warn } from '../output.js';
 
 export interface LoginResult {
 	accessToken: string;
@@ -220,8 +220,11 @@ export function googleAuthorizeUrl(parts: {
 	challenge: string;
 	hashedNonce: string;
 	state: string;
+	/** `login --email`: Google pre-selects that account in its chooser. */
+	loginHint?: string;
 }): string {
 	return `${GOOGLE_AUTH_ENDPOINT}?${new URLSearchParams({
+		...(parts.loginHint ? { login_hint: parts.loginHint } : {}),
 		client_id: googleClientId(),
 		redirect_uri: parts.redirectUri,
 		response_type: 'code',
@@ -408,6 +411,7 @@ async function exchangeCodeForIdToken(
 async function loginWithGoogle(options: {
 	timeoutMs?: number;
 	noBrowser?: boolean;
+	email?: string;
 }): Promise<LoginResult> {
 	const { verifier, challenge } = pkcePair();
 	const { raw: rawNonce, hashed: hashedNonce } = nonceForGoogle();
@@ -418,7 +422,7 @@ async function loginWithGoogle(options: {
 		timeoutMs: options.timeoutMs,
 		noBrowser: options.noBrowser,
 		authorizeUrl: (redirect) =>
-			googleAuthorizeUrl({ redirectUri: redirect, challenge, hashedNonce, state })
+			googleAuthorizeUrl({ redirectUri: redirect, challenge, hashedNonce, state, loginHint: options.email })
 	});
 
 	const idToken = await exchangeCodeForIdToken(code, verifier, redirectUri);
@@ -668,10 +672,45 @@ export async function login(
 		/** The company's own identity provider, chosen by domain rather than by name. */
 		sso?: boolean;
 		domain?: string;
+		/** The account to sign in as. A hint to the browser, then checked against the result. */
+		email?: string;
 	} = {}
 ): Promise<LoginResult> {
+	return expecting(options.email, await signIn(options));
+}
+
+/**
+ * Remember which account was asked for, and say so at once when the browser signed in as
+ * another. A provider's chooser is a hint, not a promise: somebody can still click the wrong
+ * account, and from a terminal there is no avatar in the corner to notice it by.
+ */
+export function expecting(email: string | undefined, result: LoginResult): LoginResult {
+	if (!email) {
+		return result;
+	}
+	const stored = { ...result, expectedEmail: email };
+	writeAuth(stored);
+	if (result.email && !sameEmail(result.email, email)) {
+		warn(`Signed in as ${result.email}, not ${email}. Run \`snoutdata login --email ${email}\` and pick that account.`);
+	}
+	return stored;
+}
+
+export function sameEmail(a: string, b: string): boolean {
+	return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+async function signIn(options: {
+	provider?: string;
+	timeoutMs?: number;
+	noBrowser?: boolean;
+	sso?: boolean;
+	domain?: string;
+	email?: string;
+}): Promise<LoginResult> {
 	if (options.sso) {
-		return loginWithSso(options);
+		// A work email is what SSO is looked up by anyway, so `--email` answers `--domain`.
+		return loginWithSso({ ...options, domain: options.domain ?? options.email });
 	}
 	// Google is the default and the only provider with a native path. Anything else (GitHub
 	// today) has no ID token to offer, so it keeps the auth server's redirect flow below.
