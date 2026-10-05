@@ -20,34 +20,23 @@ export async function list(): Promise<void> {
 			say('No projects yet. `snoutdata projects create --name "my project"`.');
 			return;
 		}
-		process.stdout.write(`${table(listRows(projects))}\n`);
+		process.stdout.write(
+			`${table([
+				['REF', 'NAME', 'STATE', 'REGION', 'LAST CONNECTION'],
+				...projects.map((p) => [
+					p.ref,
+					p.name,
+					// A project that is ready and refusing writes is NOT "ready" as far as
+					// somebody reading this is concerned: it is the state they need to know
+					// about, and showing `ready` beside a database that rejects every INSERT
+					// is the listing lying to them.
+					p.readOnly ? bold('read-only') : p.state === 'ready' ? p.state : bold(p.state),
+					p.region,
+					relative(p.lastConnectionAt)
+				])
+			])}\n`
+		);
 	});
-}
-
-/**
- * The rows `projects list` prints, header first.
- *
- * POSTGRES is left out altogether when no project carries a version, which is what an older
- * control plane answers: a column of dashes would say "unknown" about every project when the
- * truth is that nobody was asked.
- */
-export function listRows(projects: readonly Project[]): string[][] {
-	const versions = projects.some((p) => typeof p.postgresVersion === 'number');
-	return [
-		['REF', 'NAME', 'STATE', 'REGION', ...(versions ? ['POSTGRES'] : []), 'LAST CONNECTION'],
-		...projects.map((p) => [
-			p.ref,
-			p.name,
-			// A project that is ready and refusing writes is NOT "ready" as far as
-			// somebody reading this is concerned: it is the state they need to know
-			// about, and showing `ready` beside a database that rejects every INSERT
-			// is the listing lying to them.
-			p.readOnly ? bold('read-only') : p.state === 'ready' ? p.state : bold(p.state),
-			p.region,
-			...(versions ? [typeof p.postgresVersion === 'number' ? String(p.postgresVersion) : '-'] : []),
-			relative(p.lastConnectionAt)
-		])
-	];
 }
 
 export async function create(options: {

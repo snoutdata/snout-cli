@@ -47,7 +47,6 @@ This CLI is built to be driven by a program. The contract, which every command h
 | `9` | Network | Retry. |
 | `10` | Timed out | Retry, or raise `--timeout`. |
 | `11` | This CLI is out of date | `snoutdata upgrade`, then retry. The message names the version required. |
-| `12` | The region is full right now, and nothing was created (`no-capacity`) | Do not retry in a loop. We have been told; try again later, not in a minute. |
 | `127` | A tool this command needs is not installed | The message names it. The shell’s own convention, so a CI log reads right. |
 
 ### Credentials, without a browser

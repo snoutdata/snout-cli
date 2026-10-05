@@ -25,14 +25,9 @@ export const FUNCTIONS = `${ACCOUNTS_URL}/functions/v1`;
 
 export class ApiError extends Error {
 	readonly status: number;
-	/** The `code` the server put beside its `error`, when it sent one (`no-capacity`,
-	 *  `quota`). The status says how bad; this says which thing, and `codeForStatus`
-	 *  reads it so a full region is not reported as "try again shortly". */
-	readonly serverCode: string | null;
-	constructor(status: number, message: string, serverCode: string | null = null) {
+	constructor(status: number, message: string) {
 		super(message);
 		this.status = status;
-		this.serverCode = serverCode;
 	}
 }
 
@@ -77,9 +72,6 @@ export interface Project {
 	host: string;
 	database: string;
 	user: string;
-	/** The Postgres major the project runs (17, 18). Per project, since a project keeps the
-	 *  major it was made on. Absent from a control plane older than 2026-10-05. */
-	postgresVersion?: number;
 	createdAt: string;
 	lastConnectionAt: string | null;
 	pausedAt: string | null;
@@ -226,11 +218,7 @@ export async function call<T>(
 		if (response.status === 410) {
 			throw outdated(response, message);
 		}
-		const serverCode =
-			typeof parsed === 'object' && parsed && 'code' in parsed && typeof (parsed as { code: unknown }).code === 'string'
-				? (parsed as { code: string }).code
-				: null;
-		throw new ApiError(response.status, message, serverCode);
+		throw new ApiError(response.status, message);
 	}
 	return parsed as T;
 }

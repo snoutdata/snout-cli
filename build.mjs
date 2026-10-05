@@ -26,6 +26,13 @@ if (process.argv.includes('--prepare')) {
 // expects of an installed app, so a build without it refuses rather than shipping a CLI whose
 // Google sign-in fails. From the environment (the release workflow's secrets), else from a
 // gitignored .env.local beside this file.
+//
+// `--google-optional` is for a TEST build (SnoutData's cloud QA pass), which drives a CLI that is
+// already signed in and never runs `login`: the client is used when it is configured, and when it
+// is not the bundle has no Google sign-in, and `snoutdata login` says so instead of sending the
+// browser to Google with nothing. Nothing that publishes passes it, and deploy/audit.sh refuses a
+// packed bundle without the client, so a build like this cannot reach npm.
+const googleOptional = process.argv.includes('--google-optional');
 function googleClient(name) {
 	if (process.env[name]) {
 		return process.env[name];
@@ -40,11 +47,16 @@ function googleClient(name) {
 	} catch {
 		// no .env.local: fall through to the refusal
 	}
+	if (googleOptional) {
+		return '';
+	}
 	throw new Error(`${name} is not set (environment or .env.local beside build.mjs). \`snoutdata login\` with Google would fail for everyone.`);
 }
 const googleClientId = googleClient('SNOUTDATA_GOOGLE_CLIENT_ID');
 const googleClientSecret = googleClient('SNOUTDATA_GOOGLE_CLIENT_SECRET');
-if (!googleClientId.endsWith('.apps.googleusercontent.com') || !googleClientSecret.startsWith('GOCSPX-')) {
+if (!googleClientId && !googleClientSecret) {
+	console.log('built WITHOUT Google sign-in (--google-optional and no client configured): a test build, not for release');
+} else if (!googleClientId.endsWith('.apps.googleusercontent.com') || !googleClientSecret.startsWith('GOCSPX-')) {
 	throw new Error('SNOUTDATA_GOOGLE_CLIENT_ID / SNOUTDATA_GOOGLE_CLIENT_SECRET do not look like a Google OAuth client.');
 }
 

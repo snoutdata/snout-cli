@@ -413,6 +413,13 @@ async function loginWithGoogle(options: {
 	noBrowser?: boolean;
 	email?: string;
 }): Promise<LoginResult> {
+	// A test build (`build.mjs --google-optional`) may carry no client. Say so here, rather than
+	// sending the browser to Google with an empty client_id and letting Google explain it.
+	if (!googleClientId()) {
+		throw new Error(
+			'this build of snoutdata has no Google sign-in (it was built for testing). Sign in with a released snoutdata, then run this one.'
+		);
+	}
 	const { verifier, challenge } = pkcePair();
 	const { raw: rawNonce, hashed: hashedNonce } = nonceForGoogle();
 	const state = base64url(randomBytes(16));

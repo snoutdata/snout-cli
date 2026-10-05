@@ -265,9 +265,6 @@ export async function showCommand(ref: string): Promise<void> {
 			['ref', p.ref],
 			['state', p.state],
 			['region', p.region],
-			// Optional: a control plane older than 2026-10-05 does not send it, and a row that
-			// said "unknown" would be a guess dressed as an answer.
-			...(typeof p.postgresVersion === 'number' ? [['postgres', String(p.postgresVersion)]] : []),
 			['auth / storage / data-api / push', `${on(p.products.auth)} / ${on(p.products.storage)} / ${on(p.products.dataApi)} / ${on(p.products.push)}`],
 			['realtime', 'on (broadcast and presence; table changes on Plus and Pro)'],
 			['functions', list(p.functions)],
