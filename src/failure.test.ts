@@ -32,6 +32,8 @@ test('every code has an exit code, and none of them is zero', () => {
 		'timeout',
 		'tool-missing',
 		'server',
+		'outdated',
+		'no-capacity',
 		'failed'
 	];
 	for (const code of codes) {
@@ -61,6 +63,51 @@ test('an HTTP status becomes something worth branching on', () => {
 	assert.equal(codeForStatus(500), 'server');
 	// Not a bucket for everything unrecognised: a 418 is a failure, not a server fault.
 	assert.equal(codeForStatus(418), 'failed');
+});
+
+test('a full region is not "ask again shortly"', () => {
+	// The control plane answers a create it cannot place with 503 and code `no-capacity`.
+	// Read by status alone that was `not-ready`, exit 4, the one exit the contract says to
+	// retry, so a script obeying it polled a full region in a loop.
+	assert.equal(codeForStatus(503, 'no-capacity'), 'no-capacity');
+	assert.equal(EXIT['no-capacity'], 12);
+	assert.notEqual(EXIT['no-capacity'], EXIT['not-ready']);
+	// A 503 without a code we know stays what it was.
+	assert.equal(codeForStatus(503, null), 'not-ready');
+	assert.equal(codeForStatus(503, 'something-new'), 'not-ready');
+	// No exit code is shared by two failure codes, except `server`, which is 1 on purpose.
+	const taken = new Map<number, string>();
+	for (const [code, exit] of Object.entries(EXIT)) {
+		if (code === 'server') {
+			continue;
+		}
+		assert.equal(taken.get(exit), undefined, `${code} and ${taken.get(exit)} both exit ${exit}`);
+		taken.set(exit, code);
+	}
+});
+
+test('the server\'s code survives a refused call', async () => {
+	const { ApiError, call } = await import('./api.js');
+	const realFetch = globalThis.fetch;
+	const realToken = process.env.SNOUTDATA_ACCESS_TOKEN;
+	process.env.SNOUTDATA_ACCESS_TOKEN = 'sdt_test';
+	globalThis.fetch = async () =>
+		new Response(JSON.stringify({ code: 'no-capacity', error: 'us-west-2 is full right now.' }), { status: 503 });
+	try {
+		const thrown = await call('cloud-project-create', { name: 'x' }).catch((error: unknown) => error);
+		assert.ok(thrown instanceof ApiError, 'a refused call did not throw an ApiError');
+		assert.equal(thrown.status, 503);
+		assert.equal(thrown.serverCode, 'no-capacity');
+		assert.equal(thrown.message, 'us-west-2 is full right now.');
+		assert.equal(codeForStatus(thrown.status, thrown.serverCode), 'no-capacity');
+	} finally {
+		globalThis.fetch = realFetch;
+		if (realToken === undefined) {
+			delete process.env.SNOUTDATA_ACCESS_TOKEN;
+		} else {
+			process.env.SNOUTDATA_ACCESS_TOKEN = realToken;
+		}
+	}
 });
 
 test('a dead network is told apart from a bug of ours', () => {

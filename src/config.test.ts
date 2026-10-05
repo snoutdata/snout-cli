@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { authPath, clearAuth, findLink, isExpired, readAuth, resolveRef, writeAuth, writeLink } from './config.js';
+import { authPath, clearAuth, findLink, initStart, isExpired, readAuth, resolveRef, writeAuth, writeLink } from './config.js';
 import { writeEnv } from './commands/db.js';
 
 function scratch(): string {
@@ -81,6 +81,27 @@ test('a project comes from the flag, then the environment, then the link', () =>
 	);
 	assert.equal(resolveRef({ cwd: root, environment: {} }), 'linked7xt4rvz');
 	assert.equal(resolveRef({ cwd: scratch(), environment: {} }), null);
+});
+
+test('init --ref in a new folder links it, and only a linked folder is called linked', () => {
+	// `init --ref` used to read the flag as "this folder is linked", say so, write nothing,
+	// and leave the next `db url` there with no project.
+	const fresh = scratch();
+	assert.deepEqual(initStart({ flag: 'flagged9xt4rv', cwd: fresh, environment: {} }), { kind: 'link', ref: 'flagged9xt4rv', replaces: null });
+	assert.deepEqual(initStart({ cwd: fresh, environment: {} }), { kind: 'create' });
+
+	const linked = scratch();
+	const below = join(linked, 'src');
+	mkdirSync(below, { recursive: true });
+	writeLink(linked, { ref: 'linked7xt4rvz' });
+	assert.deepEqual(initStart({ cwd: below, environment: {} }), { kind: 'linked', ref: 'linked7xt4rvz' });
+	assert.deepEqual(initStart({ flag: 'linked7xt4rvz', cwd: below, environment: {} }), { kind: 'linked', ref: 'linked7xt4rvz' });
+	// A different ref is a relink, and says what it replaces.
+	assert.deepEqual(initStart({ flag: 'flagged9xt4rv', cwd: below, environment: {} }), { kind: 'link', ref: 'flagged9xt4rv', replaces: 'linked7xt4rvz' });
+
+	// The environment names a project without linking anything.
+	assert.deepEqual(initStart({ cwd: fresh, environment: { SNOUTDATA_PROJECT: 'envvar09xt4rv' } }), { kind: 'environment', ref: 'envvar09xt4rv' });
+	assert.deepEqual(initStart({ cwd: below, environment: { SNOUTDATA_PROJECT: 'linked7xt4rvz' } }), { kind: 'linked', ref: 'linked7xt4rvz' });
 });
 
 test('DATABASE_URL is replaced rather than duplicated', () => {
