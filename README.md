@@ -130,6 +130,10 @@ snoutdata db push [--dir migrations] [--dry-run]  # run the .sql files, once eac
 snoutdata db restore --file DUMP [--force]
 ```
 
+`db psql`, `db push`, `db restore` and `gen types` verify the database's certificate
+(`sslmode=verify-full`, against Node's trusted roots). `SNOUTDATA_DB_SSLMODE=require` turns the
+check off, for a network that re-signs Postgres traffic.
+
 **Types**
 
 ```bash

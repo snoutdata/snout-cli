@@ -32,6 +32,7 @@
  * could not** (D3).
  */
 
+import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
@@ -134,6 +135,7 @@ export type DesktopSkip =
 	| 'server-disabled'
 	| 'handoff-disabled'
 	| 'not-running'
+	| 'not-verified'
 	| 'signed-out'
 	| 'cannot-mint';
 
@@ -170,6 +172,133 @@ export function offerFromConfig(config: DesktopConfig | null): DesktopSkip | nul
 /** A short timeout: the app is on loopback, so slow means absent rather than busy. */
 const DIAL_MS = 1500;
 
+// ---------------------------------------------------------------------------
+// Who holds the port, before the bearer is sent to it.
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether the socket listening on `127.0.0.1:<port>` belongs to this user.
+ *
+ * **The bearer in `mcp.json` is long-lived, and a loopback port is not per-user.** Another
+ * account on the same machine can bind the port while the app is closed, so sending the
+ * token to "whatever answers" hands it to them, and lets them answer `whoami` and
+ * `/cli/token` as they like (audit 14-A). The app offers no way to prove it holds the
+ * token without being sent it, so the proof here is the operating system's: the listener
+ * must be a process of ours. The app binds exactly `127.0.0.1` (`mcpServer.ts` HOST), and
+ * only one socket can hold that address and port, so "ours listens there" is the check.
+ *
+ * Every failure to find out is a NO: the token is not sent, and the caller treats the app
+ * as absent, which is the same outcome as it not running.
+ */
+export type PeerCheck = (port: number) => Promise<boolean>;
+
+/** `/proc/net/tcp` (Linux): the uids of LISTEN sockets on exactly 127.0.0.1:<port>. */
+export function procNetListenerUids(table: string, port: number): number[] {
+	const want = `0100007F:${port.toString(16).toUpperCase().padStart(4, '0')}`;
+	const uids: number[] = [];
+	for (const line of table.split('\n').slice(1)) {
+		const cols = line.trim().split(/\s+/);
+		// sl, local_address, rem_address, st, tx:rx, tr:when, retrnsmt, uid, ...
+		if (cols.length > 7 && cols[1]?.toUpperCase() === want && cols[3] === '0A') {
+			uids.push(Number(cols[7]));
+		}
+	}
+	return uids;
+}
+
+/** `lsof -F n` restricted to our uid (macOS): did any of our processes list the address. */
+export function lsofListsAddress(output: string, port: number): boolean {
+	return output.split('\n').some((line) => line.trim() === `n127.0.0.1:${port}`);
+}
+
+function run(file: string, args: string[]): Promise<string> {
+	return new Promise((resolve) => {
+		execFile(file, args, { timeout: 5000, windowsHide: true }, (error, stdout) => {
+			// lsof exits 1 when it found nothing, which is an answer ("not ours"), not a fault.
+			resolve(error && !stdout ? '' : String(stdout));
+		});
+	});
+}
+
+/** The real check, per platform. Unknown platforms are a NO. */
+export async function listenerIsMine(port: number, platform: NodeJS.Platform = process.platform): Promise<boolean> {
+	if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+		return false;
+	}
+	try {
+		if (platform === 'linux') {
+			const uid = process.getuid?.();
+			if (uid === undefined) {
+				return false;
+			}
+			const uids = procNetListenerUids(readFileSync('/proc/net/tcp', 'utf8'), port);
+			return uids.length > 0 && uids.every((owner) => owner === uid);
+		}
+		if (platform === 'darwin') {
+			const uid = process.getuid?.();
+			if (uid === undefined) {
+				return false;
+			}
+			// -a ANDs the selections: a LISTEN socket on exactly this address, held by a
+			// process of this uid. Another user's process is never listed.
+			const out = await run('/usr/sbin/lsof', ['-nP', '-a', `-iTCP@127.0.0.1:${port}`, '-sTCP:LISTEN', '-u', String(uid), '-Fn']);
+			return lsofListsAddress(out, port);
+		}
+		if (platform === 'win32') {
+			// The listener's owning process, and that process's owner, against ours. A process
+			// of another user answers GetOwner with access denied (ReturnValue 2), which is a NO.
+			const script = [
+				`$c = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort ${port} -State Listen -ErrorAction Stop | Select-Object -First 1`,
+				'$p = Get-CimInstance Win32_Process -Filter "ProcessId=$($c.OwningProcess)" -ErrorAction Stop',
+				'$o = Invoke-CimMethod -InputObject $p -MethodName GetOwner -ErrorAction Stop',
+				'$me = [Security.Principal.WindowsIdentity]::GetCurrent().Name',
+				'if ($o.ReturnValue -eq 0 -and ("$($o.Domain)\\$($o.User)" -ieq $me)) { "mine" } else { "other" }'
+			].join('; ');
+			const out = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]);
+			return out.trim() === 'mine';
+		}
+	} catch {
+		return false;
+	}
+	return false;
+}
+
+/** A yes is remembered briefly, so a run of tool calls does not ask the OS each time. */
+const VERIFIED_MS = 10_000;
+const verified = new Map<number, number>();
+
+async function verifyPeer(port: number, check: PeerCheck): Promise<boolean> {
+	const at = verified.get(port);
+	if (at !== undefined && Date.now() - at < VERIFIED_MS) {
+		return true;
+	}
+	const mine = await check(port).catch(() => false);
+	if (mine) {
+		verified.set(port, Date.now());
+	} else {
+		verified.delete(port);
+	}
+	return mine;
+}
+
+/** The one way a request carrying the app's bearer leaves this process. */
+async function dial(config: DesktopConfig, path: string, init: RequestInit, check: PeerCheck = listenerIsMine): Promise<Response> {
+	if (!(await verifyPeer(config.port as number, check))) {
+		throw new PeerNotVerified(config.port as number);
+	}
+	return fetch(`http://127.0.0.1:${config.port}${path}`, {
+		...init,
+		headers: { ...(init.headers as Record<string, string>), Authorization: `Bearer ${config.token}` }
+	});
+}
+
+export class PeerNotVerified extends Error {
+	constructor(port: number) {
+		super(`the process on 127.0.0.1:${port} is not one of this user's, so SnoutData Studio's token was not sent to it`);
+		this.name = 'PeerNotVerified';
+	}
+}
+
 /**
  * Ask every app that left a config, and take the first that answers.
  *
@@ -177,9 +306,9 @@ const DIAL_MS = 1500;
  * installed app that has not run since June leaves a file pointing at a port nothing is
  * listening on, and the dev app running right now is the second entry.
  */
-export async function look(config?: DesktopConfig | null): Promise<DesktopLook> {
+export async function look(config?: DesktopConfig | null, check: PeerCheck = listenerIsMine): Promise<DesktopLook> {
 	if (config !== undefined) {
-		return lookAt(config);
+		return lookAt(config, check);
 	}
 	let lastSkip: DesktopSkip = 'no-config';
 	for (const path of configPaths()) {
@@ -187,13 +316,13 @@ export async function look(config?: DesktopConfig | null): Promise<DesktopLook> 
 		if (!found) {
 			continue;
 		}
-		const result = await lookAt(found);
+		const result = await lookAt(found, check);
 		if (result.available) {
 			return result;
 		}
 		// "Switched off" and "signed out" are worth reporting over "not running": they are
 		// something the person can act on, and the later candidate is usually the stale one.
-		if (result.skip !== 'not-running') {
+		if (result.skip !== 'not-running' && result.skip !== 'not-verified') {
 			lastSkip = result.skip;
 		} else if (lastSkip === 'no-config') {
 			lastSkip = result.skip;
@@ -202,18 +331,20 @@ export async function look(config?: DesktopConfig | null): Promise<DesktopLook> 
 	return { available: false, skip: lastSkip };
 }
 
-async function lookAt(config: DesktopConfig | null): Promise<DesktopLook> {
+async function lookAt(config: DesktopConfig | null, check: PeerCheck): Promise<DesktopLook> {
 	const skip = offerFromConfig(config);
 	if (skip) {
 		return { available: false, skip };
 	}
 	const settled = config as DesktopConfig;
+	if (!(await verifyPeer(settled.port as number, check))) {
+		// Nothing of ours is listening there: either the app is closed, or somebody else holds
+		// the port. Either way the token stays here.
+		return { available: false, skip: 'not-verified' };
+	}
 	let who: DesktopWho;
 	try {
-		const response = await fetch(`http://127.0.0.1:${settled.port}/cli/whoami`, {
-			headers: { Authorization: `Bearer ${settled.token}` },
-			signal: AbortSignal.timeout(DIAL_MS)
-		});
+		const response = await dial(settled, '/cli/whoami', { signal: AbortSignal.timeout(DIAL_MS) }, check);
 		if (!response.ok) {
 			return { available: false, skip: 'not-running' };
 		}
@@ -240,9 +371,9 @@ async function lookAt(config: DesktopConfig | null): Promise<DesktopLook> {
  * as a failure: somebody who said "not now" has not hit an error.
  */
 export async function mint(config: DesktopConfig, command: string): Promise<{ token: string; name: string } | { declined: true; reason: string }> {
-	const response = await fetch(`http://127.0.0.1:${config.port}/cli/token`, {
+	const response = await dial(config, '/cli/token', {
 		method: 'POST',
-		headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json' },
+		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ client: 'snoutdata-cli', command }),
 		// Longer than the dial: there is a person reading a card on the other end of this.
 		signal: AbortSignal.timeout(60_000)
@@ -284,10 +415,9 @@ export interface BorrowedTool {
 }
 
 async function rpc(config: DesktopConfig, method: string, params: unknown, timeoutMs: number): Promise<unknown> {
-	const response = await fetch(`http://127.0.0.1:${config.port}/mcp`, {
+	const response = await dial(config, '/mcp', {
 		method: 'POST',
 		headers: {
-			Authorization: `Bearer ${config.token}`,
 			'Content-Type': 'application/json',
 			Accept: 'application/json'
 		},

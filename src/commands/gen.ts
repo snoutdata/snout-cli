@@ -37,6 +37,7 @@ import { fail } from '../failure.js';
 import { emit, say } from '../output.js';
 import type { ColumnInfo, DatabaseSchema, RoutineInfo, TableInfo } from '../shared/schema.js';
 import { emitTypeScriptTypes, type TypeGenEnum } from '../shared/typescriptTypes.js';
+import { cloudSsl } from '../pgTls.js';
 
 /** Where a `gen` command gets its database from. Exactly one of these is used. */
 export interface GenTarget {
@@ -73,18 +74,22 @@ export interface Target {
 	readonly user: string;
 	readonly password: string;
 	readonly sslMode: string;
+	/** A root file to verify the server with, for a cloud project (`pgTls.ts`). */
+	readonly sslRootCert?: string;
 	/** For a message: which database this is, without the password in it. */
 	readonly label: string;
 }
 
 function fromConnection(details: Connection): Target {
+	const ssl = cloudSsl(details.ssl);
 	return {
 		host: details.host,
 		port: details.port,
 		database: details.database,
 		user: details.user,
 		password: details.password,
-		sslMode: details.ssl === 'disable' ? 'disable' : 'require',
+		sslMode: ssl.mode,
+		...(ssl.rootCert ? { sslRootCert: ssl.rootCert } : {}),
 		label: details.ref
 	};
 }
@@ -150,7 +155,7 @@ export function runPsql(target: Target, sql: string): Promise<{ code: number; ou
 			],
 			{
 				stdio: ['pipe', 'pipe', 'pipe'],
-				env: { ...process.env, PGPASSWORD: target.password, PGSSLMODE: target.sslMode }
+				env: { ...process.env, PGPASSWORD: target.password, PGSSLMODE: target.sslMode, ...(target.sslRootCert ? { PGSSLROOTCERT: target.sslRootCert } : {}) }
 			}
 		);
 		let out = '';

@@ -10,7 +10,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { open } from 'node:fs/promises';
@@ -21,6 +21,7 @@ import { CliFailure, fail } from '../failure.js';
 import { canAsk, explainNoHuman, noHumanReason } from '../interactive.js';
 import { connection } from '../api.js';
 import { dim, emit, relative, say, warn } from '../output.js';
+import { pgSslEnv } from '../pgTls.js';
 
 /**
  * Say it, once, if this project has stopped accepting writes.
@@ -99,7 +100,7 @@ export async function psql(ref: string, rest: readonly string[]): Promise<number
 		],
 		{
 			stdio: 'inherit',
-			env: { ...process.env, PGPASSWORD: details.password, PGSSLMODE: details.ssl === 'disable' ? 'disable' : 'require' }
+			env: { ...process.env, PGPASSWORD: details.password, ...pgSslEnv(details.ssl) }
 		}
 	);
 	return new Promise((resolve, reject) => {
@@ -128,8 +129,14 @@ export function writeEnv(directory: string, value: string, key = 'DATABASE_URL')
 	// The value holds a password, so in a repository the file is kept out of a commit first.
 	const ignored = ignoreEnv(directory);
 	if (!existsSync(path)) {
-		writeFileSync(path, `${line}\n`);
+		// Readable by this user only: on a 0755 home or a shared project folder, another
+		// account could otherwise read the password (audit 14-D).
+		writeFileSync(path, `${line}\n`, { mode: 0o600 });
 		return { path, replaced: false, ignored };
+	}
+	// An existing file keeps its mode, which is the user's to choose; say so when it is open.
+	if (process.platform !== 'win32' && (statSync(path).mode & 0o077) !== 0) {
+		warn(`${path} can be read by other users on this machine, and it holds a database password. \`chmod 600 ${path}\` closes it.`);
 	}
 	const existing = readFileSync(path, 'utf8');
 	const pattern = new RegExp(`^${key}=.*$`, 'm');
@@ -500,7 +507,7 @@ async function countTables(details: api.Connection): Promise<number | null> {
 					// tables, owned by those products' roles, and counting them refused every
 					// restore into such a project (2026-10-02).
 					" and pg_get_userbyid(c.relowner) !~ '^(snoutpod_admin|snout_[a-z]+_admin)$'"],
-			{ stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: details.password, PGSSLMODE: details.ssl === 'disable' ? 'disable' : 'require' } }
+			{ stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: details.password, ...pgSslEnv(details.ssl) } }
 		);
 		let out = '';
 		child.stdout.on('data', (chunk) => (out += String(chunk)));
@@ -528,7 +535,7 @@ function missingTables(details: api.Connection, tables: readonly string[]): Prom
 			'psql',
 			['--host', details.host, '--port', String(details.port), '--username', details.user, '--dbname', details.database, '--no-psqlrc', '-tAc',
 				`select t from unnest(array[${list}]) t where to_regclass(t) is null`],
-			{ stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: details.password, PGSSLMODE: details.ssl === 'disable' ? 'disable' : 'require' } }
+			{ stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: details.password, ...pgSslEnv(details.ssl) } }
 		);
 		let out = '';
 		child.stdout.on('data', (chunk) => (out += String(chunk)));
@@ -606,7 +613,7 @@ function runRestore(details: api.Connection, tool: 'psql' | 'pg_restore', path: 
 		// to judge.
 		const child = spawn(tool, args, {
 			stdio: ['ignore', 'inherit', 'pipe'],
-			env: { ...process.env, PGPASSWORD: details.password, PGSSLMODE: details.ssl === 'disable' ? 'disable' : 'require' }
+			env: { ...process.env, PGPASSWORD: details.password, ...pgSslEnv(details.ssl) }
 		});
 		let stderr = '';
 		child.stderr?.on('data', (chunk) => {
