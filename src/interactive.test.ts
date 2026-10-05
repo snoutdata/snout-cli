@@ -1,5 +1,5 @@
 /**
- * D1, asserted. The rule this file protects is the one that keeps an agent from hanging,
+ * The no-prompt rule, asserted. The rule this file protects is the one that keeps an agent from hanging,
  * so every way of saying "nobody is watching" gets a test rather than a comment.
  */
 

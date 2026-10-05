@@ -1,7 +1,7 @@
 /**
  * `snoutdata db …` — being inside the database, with nothing typed.
  *
- * The promise this file keeps is D12's: **being signed in is enough.** `db psql` fetches
+ * The promise this file keeps: **being signed in is enough.** `db psql` fetches
  * the project's credentials, hands psql a URL, and never asks anybody for a password —
  * which is the whole reason the connection function exists.
  *
@@ -67,7 +67,7 @@ export async function url(ref: string): Promise<void> {
  *
  * What is NOT allowed is walking into that ambiguity by accident. With no statements after
  * `--` this opens an interactive session, and an interactive session with nobody at the
- * keyboard is a job that hangs until it is killed. So it refuses under the same D1 gate as
+ * keyboard is a job that hangs until it is killed. So it refuses under the same no-prompt gate as
  * every other question, and says which flag would have worked.
  */
 export async function psql(ref: string, rest: readonly string[]): Promise<number> {

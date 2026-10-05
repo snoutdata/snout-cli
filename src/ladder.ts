@@ -17,7 +17,7 @@
  *
  * ## The rule that matters more than the rungs
  *
- * **Three and four exist only when there is a person to answer them** (D1). Anything else
+ * **Three and four exist only when there is a person to answer them** (`interactive.ts`). Anything else
  * fails immediately with `not-signed-in` and a sentence naming what would have worked.
  *
  * This is not caution for its own sake. `snoutdata login --json` used to spawn a browser

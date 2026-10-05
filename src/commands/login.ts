@@ -20,8 +20,8 @@
  * **What was deliberately NOT done instead.** Repointing the auth server's Google provider at the
  * live client is one dashboard field and would have fixed this too, but that same field is
  * what verifies the ID tokens the website, the dashboard and the desktop already send: a
- * wrong edit there breaks three working surfaces to fix one broken one. `docs/cli/PLAN.md` D10 is
- * where that gets settled properly, once, for every surface.
+ * wrong edit there breaks three working surfaces to fix one broken one. That gets settled
+ * properly once, for every surface, by putting one client behind one hosted page.
  *
  * **GitHub stays on the auth server's redirect flow**, exactly as it does in the desktop, because
  * GitHub issues no ID token and there is therefore nothing to hand to `grant_type=id_token`.
@@ -170,7 +170,7 @@ const GOOGLE_AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 
 // The SAME "Desktop app" OAuth client the desktop uses (`googleNativeAuth.ts`, kept in step
-// with this by hand: one client, written down twice, which is one of the things D10 exists to
+// with this by hand: one client, written down twice, which one hosted sign-in page will
 // collapse). Reusing it rather than registering another is the point. It is already in the auth
 // server's accepted Client IDs, so `grant_type=id_token` accepts what it mints, which is why this
 // fix needed no change in either console.
@@ -179,7 +179,7 @@ const GOOGLE_TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 // binary, and the flow is protected by PKCE and the loopback redirect rather than by keeping
 // this value quiet. That is what makes it publishable in an npm package. It is also why the
 // consent screen reads "SnoutData Desktop" from a terminal, which is cosmetic and goes away
-// when D10 puts one client behind one hosted page.
+// when one client sits behind one hosted page.
 //
 // Neither value is in this source, because the source is mirrored to a public repository and
 // GitHub's push protection refuses a Google client secret there. build.mjs injects both from
@@ -460,7 +460,7 @@ function storeSession(data: unknown): LoginResult {
 /**
  * The domain to ask for single sign-on with, or null when what was typed cannot be one.
  *
- * A TWIN of `ssoDomainFromEmail` in `apps/desktop/src/shared/auth.ts`, by copy, because the
+ * A TWIN of the desktop app's `ssoDomainFromEmail`, by copy, because the
  * CLI is one bundled file with no dependencies and cannot import across an app. Same rules,
  * deliberately: a work email or a bare domain, lowercased, with an alphabetic top-level label
  * so `you@localhost` is refused here instead of becoming a request nobody can answer.
@@ -514,7 +514,7 @@ function messageFromBody(body: string): string {
  * not, and the person has somewhere to go, so the sentence names the DOMAIN they asked for
  * and points at whoever administers their team.
  *
- * A twin of `ssoFailureMessage` in `apps/desktop/src/main/authIdentity.ts`, for the same
+ * A twin of the desktop app's `ssoFailureMessage`, for the same
  * reason `ssoDomain` is. Anything we do not recognise keeps the backend's own words rather
  * than inventing a diagnosis. Pure, and exported, so every branch is testable without a
  * network.
@@ -589,7 +589,7 @@ async function ssoAuthorizeUrl(parts: {
 /**
  * Which domain, asked for once, or refused fast.
  *
- * D1: with nobody to ask, this does NOT prompt. It fails with the flag that would have
+ * With nobody to ask, this does NOT prompt. It fails with the flag that would have
  * worked and the reason nothing was asked, which is exit 2 — the documented "a command that
  * would have to ask says what flag to pass instead". A prompt here would be a five-minute
  * hang in CI at the moment an agent is least able to explain itself.
@@ -613,7 +613,7 @@ async function resolveSsoDomain(given?: string): Promise<string> {
 	const rl = createInterface({ input: process.stdin, output: process.stderr });
 	// `question` never settles if the input ends before an answer arrives — a pipe that ran
 	// out, a terminal that went away — and a sign-in that hangs in silence is the exact
-	// failure D1 exists to prevent. Racing it against the reader closing turns that into a
+	// failure the no-prompt rule exists to prevent. Racing it against the reader closing turns that into a
 	// sentence. Our own `rl.close()` below fires this too, hence the handler that swallows it.
 	const ended = new Promise<string>((_, reject) => {
 		rl.once('close', () =>
@@ -739,7 +739,7 @@ async function signIn(options: {
 			// the CLI is the surface where it is hardest to notice because there is no
 			// avatar in the corner to check afterwards.
 			//
-			// `apps/web` has always done this (`prompt: 'select_account'`); the CLI did
+			// The website has always done this (`prompt: 'select_account'`); the CLI did
 			// not, which is the whole difference in behaviour between them.
 			authorize.searchParams.set('prompt', 'select_account');
 			return authorize.toString();

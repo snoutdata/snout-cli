@@ -25,9 +25,14 @@ export const FUNCTIONS = `${ACCOUNTS_URL}/functions/v1`;
 
 export class ApiError extends Error {
 	readonly status: number;
-	constructor(status: number, message: string) {
+	/** The `code` the server put beside its `error`, when it sent one (`no-capacity`,
+	 *  `quota`). The status says how bad; this says which thing, and `codeForStatus`
+	 *  reads it so a full region is not reported as "try again shortly". */
+	readonly serverCode: string | null;
+	constructor(status: number, message: string, serverCode: string | null = null) {
 		super(message);
 		this.status = status;
+		this.serverCode = serverCode;
 	}
 }
 
@@ -42,7 +47,7 @@ export class NotSignedIn extends Error {
  *
  * A script that stops with "not signed in: run `snoutdata login`" has been told to do the
  * one thing it cannot do, since `login` needs a browser. Where there is nobody to run it,
- * say the thing that works instead, and say why nothing was offered (D1).
+ * say the thing that works instead, and say why nothing was offered.
  */
 function notSignedInAdvice(): string {
 	const reason = noHumanReason();
@@ -72,6 +77,9 @@ export interface Project {
 	host: string;
 	database: string;
 	user: string;
+	/** The Postgres major the project runs (17, 18). Per project, since a project keeps the
+	 *  major it was made on. Absent from a control plane older than 2026-10-05. */
+	postgresVersion?: number;
 	createdAt: string;
 	lastConnectionAt: string | null;
 	pausedAt: string | null;
@@ -88,7 +96,7 @@ export interface Connection {
 	uri: string;
 	/**
 	 * The project's API keys: two HS256 JWTs carrying a `role` claim, which is what a client
-	 * presents (STACK.md S2). Derived from the project's signing
+	 * presents. Derived from the project's signing
 	 * secret on every read rather than stored, so they are the same string every time
 	 * until somebody rotates them.
 	 *
@@ -125,7 +133,7 @@ async function currentToken(): Promise<string> {
 	if (!auth) {
 		// The ladder, and the only place it hangs off: every command reaches the network
 		// through `call()`, which reaches it through here, so there is one rung order and
-		// no command can have its own. See `ladder.ts` for the D1 rule that governs it.
+		// no command can have its own. See `ladder.ts` for the rule that governs it.
 		auth = await climb();
 	}
 	if (!auth) {
@@ -218,7 +226,11 @@ export async function call<T>(
 		if (response.status === 410) {
 			throw outdated(response, message);
 		}
-		throw new ApiError(response.status, message);
+		const serverCode =
+			typeof parsed === 'object' && parsed && 'code' in parsed && typeof (parsed as { code: unknown }).code === 'string'
+				? (parsed as { code: string }).code
+				: null;
+		throw new ApiError(response.status, message, serverCode);
 	}
 	return parsed as T;
 }
@@ -358,7 +370,7 @@ export async function exportStatus(ref: string): Promise<{ ref: string; export: 
  * Each of those returns as soon as the row says what is wanted; the host makes it so seconds
  * later. Until 2026-10-03 the CLI printed "resumed." at once while the project stayed `paused`
  * for twelve seconds, and a second pause answered "already paused" while it was still
- * `pausing` (docs/cloud/QA-RETEST.md §3n). Resolves with the project as settled, or null once
+ * `pausing`. Resolves with the project as settled, or null once
  * a deleted one has left the list.
  */
 export async function waitForSettled(

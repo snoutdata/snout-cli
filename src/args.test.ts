@@ -46,7 +46,7 @@ test('a number flag is a number, and anything else stops the command', () => {
 	assert.throws(() => flagNumber(parseArgs(['--expires', '1.5']), 'expires'), UsageError);
 });
 
-test('the flags Phase H added are known, because an unknown one is refused outright', () => {
+test('the functions flags are known, because an unknown one is refused outright', () => {
 	// The guard doing its job is how this was found: `functions deploy --no-verify-jwt`
 	// failed with "unknown option" against a live project. Every flag a command reads has
 	// to be declared here, and a command reading one that is not is a command whose flag

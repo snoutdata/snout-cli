@@ -33,8 +33,8 @@
  *
  * ## The order
  *
- * Byte-wise on the file name, which is `ls | sort` and is what `apps/cloud/sql/apply.sh`
- * does for this project's own schema. Zero-padded numeric prefixes (`001-`, `002-`) are
+ * Byte-wise on the file name, which is `ls | sort` and is what SnoutData
+ * does for its own schema. Zero-padded numeric prefixes (`001-`, `002-`) are
  * the convention that makes that correct, and the reason to keep them.
  */
 

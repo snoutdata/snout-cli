@@ -3,7 +3,7 @@
  *
  * The companion to `snoutdata start`: the two commands a developer working against a hosted
  * Postgres actually reaches for. It needs `psql` and one query, because the thing that turns a
- * schema into TypeScript is ours (`docs/cloud/STACK.md` S12) and lives in
+ * schema into TypeScript is ours and lives in
  * `src/shared/typescriptTypes.ts`, copied from the desktop app's `shared/` where it is the
  * canonical file and is tested.
  *

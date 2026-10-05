@@ -1,7 +1,7 @@
 /**
  * The rest of a project's controls, from a terminal: what `projects show`, `products`,
  * `domains` and `db restore --at` do. The same controls the desktop app's project tab and the
- * dashboard have (docs/desktop/CLOUD-PROJECTS.md), because the CLI is how somebody without the
+ * dashboard have, because the CLI is how somebody without the
  * app does everything the app does.
  *
  * Each export is split the way `functions.ts` splits its: a `get…`/`set…` that RETURNS the answer,
@@ -265,6 +265,9 @@ export async function showCommand(ref: string): Promise<void> {
 			['ref', p.ref],
 			['state', p.state],
 			['region', p.region],
+			// Optional: a control plane older than 2026-10-05 does not send it, and a row that
+			// said "unknown" would be a guess dressed as an answer.
+			...(typeof p.postgresVersion === 'number' ? [['postgres', String(p.postgresVersion)]] : []),
 			['auth / storage / data-api / push', `${on(p.products.auth)} / ${on(p.products.storage)} / ${on(p.products.dataApi)} / ${on(p.products.push)}`],
 			['realtime', 'on (broadcast and presence; table changes on Plus and Pro)'],
 			['functions', list(p.functions)],

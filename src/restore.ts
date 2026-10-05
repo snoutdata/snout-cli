@@ -155,7 +155,7 @@ export function classifyRestoreErrors(stderr: string): RestoreErrors {
  * "half-finished restore" verdict on a restore whose data was all there, 2026-10-02); and
  * where a product was OFF in the target the restore CREATED its tables, owned by the
  * customer's role, so switching that product on afterwards crashed it: snout-auth could not
- * read `auth.schema_migrations` (docs/cloud/QA-RETEST.md §3e).
+ * read `auth.schema_migrations`.
  *
  * So the platform's objects are never restored; only their ROWS are, into the tables the
  * platform made, which is why a dump holding auth, storage or push data needs that product on

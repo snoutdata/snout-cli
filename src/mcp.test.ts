@@ -200,7 +200,7 @@ test('every tool has a schema that says what it takes', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 5: the surface an agent gets is the surface the CLI has.
+// The surface an agent gets is the surface the CLI has.
 // ---------------------------------------------------------------------------
 
 test('every tool the CLI advertises can actually be called', async () => {
@@ -264,7 +264,7 @@ test('create_token warns that the token is shown once', async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 5's last box: one endpoint, both halves, when both are present.
+// One endpoint, both halves, when both are present.
 // ---------------------------------------------------------------------------
 
 const BORROWED_TOOL = {

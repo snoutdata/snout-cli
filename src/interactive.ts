@@ -1,7 +1,7 @@
 /**
  * Whether there is a person here, and what may be asked of them.
  *
- * This is the whole of decision **D1** in `docs/cli/PLAN.md`, and it is small on purpose: an auth
+ * This is the whole of the CLI's **no-prompt rule**, and it is small on purpose: an auth
  * ladder that can stop and ask is a good thing for somebody at a keyboard and a hang for
  * everything else, so the question "is anybody there" gets one answer, in one place, that
  * every rung consults.

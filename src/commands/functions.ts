@@ -1,7 +1,7 @@
 /**
  * `snoutdata functions …` — deploy code to the edge, list it, remove it.
  *
- * `docs/cloud/STACK.md` Phase H. A function is a folder of TypeScript; this reads it,
+ * A function is a folder of TypeScript; this reads it,
  * checks it against the rules the control plane will check it against again, and posts
  * it. Nothing here compiles or bundles: the runtime is Deno and takes TypeScript
  * directly.
@@ -160,8 +160,8 @@ export interface DeployOptions {
  * `../_shared/…`, and until 2026-09-15 this shipped only the function's own folder, so such an
  * import deployed fine and failed at the first request. When the sibling exists the bundle is laid
  * out the way that import assumes, `<name>/…` beside `_shared/…` with the entrypoint under
- * `<name>/`, which is also exactly how the control plane builds its own functions
- * (`packages/snoutpod/control-plane/functions-build.mjs`). Without one the layout is flat, as it
+ * `<name>/`, which is also exactly how the control plane builds its own functions.
+ * Without one the layout is flat, as it
  * always was, so a function that never used `_shared` keeps the same digest.
  */
 export async function collectFunction(

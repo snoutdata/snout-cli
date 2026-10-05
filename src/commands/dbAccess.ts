@@ -1,6 +1,6 @@
 /**
  * `snoutdata db access …` — who may sign in to a project's database as THEMSELVES, with OAuth,
- * instead of with the shared project password (docs/cloud/DB-OAUTH.md, Phase 3). Postgres 18.
+ * instead of with the shared project password. Postgres 18.
  *
  *   snoutdata db access [list]                   everyone with access, and their role
  *   snoutdata db access grant EMAIL [--level L]  full or read (read when not said)
@@ -13,7 +13,7 @@
  *
  *   * **A grant prints the connection string on stdout, alone**, as `tokens create` prints its
  *     token, so `psql "$(snoutdata db access grant me@x.com)"` works. It carries `oauth_issuer`
- *     and `oauth_client_id`, without which libpq 18 will not try (DB-OAUTH.md, spike finding 4),
+ *     and `oauth_client_id`, without which libpq 18 will not try,
  *     and no password, because there is none.
  *   * **A revoke says what it does not do.** A token already issued can keep working until it
  *     expires, up to an hour, for as long as the database still has the role. The server's

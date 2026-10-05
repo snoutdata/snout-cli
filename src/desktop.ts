@@ -1,7 +1,7 @@
 /**
  * The SnoutData desktop app, if it happens to be running here.
  *
- * Rung three of the auth ladder (`docs/cli/PLAN.md`, D2/D3/D8). Somebody who has the app open and
+ * Rung three of the auth ladder (`ladder.ts`). Somebody who has the app open and
  * is signed in to it should not have to go and find a browser to use the CLI on the same
  * machine as the same account, and until now the CLI did not know the app existed.
  *
@@ -9,8 +9,8 @@
  *
  * The app already writes `mcp.json` into its own userData directory on every launch,
  * holding the port it bound and the bearer token that gates it, because the server walks
- * upward from 7311 and persists whichever port it got so a copied config keeps matching
- * (D8). That file is the whole mechanism. No broadcast, no scanning a port range, no
+ * upward from 7311 and persists whichever port it got so a copied config keeps matching.
+ * That file is the whole mechanism. No broadcast, no scanning a port range, no
  * service record: if the file is not there, the app has never run here, and if the port
  * does not answer, it is not running now.
  *
@@ -21,7 +21,7 @@
  * session is not a token). So it mints an `sdt_` named for this machine, which is
  * revocable with `snoutdata tokens revoke`, visible in `tokens list`, and lands on the
  * audit log as itself rather than as the person. Handing over the session would give this
- * process the user's whole login with no way to see it or take it back (D2).
+ * process the user's whole login with no way to see it or take it back.
  *
  * ## And it is a courtesy, not a lock
  *
@@ -29,7 +29,7 @@
  * SURPRISE. Any process running as the user can already decrypt what the app keeps in
  * `safeStorage`, because that is DPAPI or Keychain and it is user-scoped. **The sentence
  * that stays true is that the CLI does not take your session without asking. Never that it
- * could not** (D3).
+ * could not**.
  */
 
 import { execFile } from 'node:child_process';
@@ -61,8 +61,8 @@ export interface DesktopWho {
  * Where Electron puts userData, per platform.
  *
  * Hardcoded rather than resolved, because the CLI is not an Electron app and must not
- * take a dependency on one to find a file. `snoutdata` is `package.json`'s `name` in
- * `apps/desktop`, which is what Electron uses for the directory.
+ * take a dependency on one to find a file. `snoutdata` is the desktop app's `package.json`
+ * `name`, which is what Electron uses for the directory.
  */
 function userDataDir(app: string, platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string {
 	if (platform === 'win32') {
@@ -441,7 +441,7 @@ async function rpc(config: DesktopConfig, method: string, params: unknown, timeo
  * initialize and never again, so a tool discovered later is one the agent can never learn
  * about. That is why this happens at startup and why "the app was not running when I
  * started" is a permanent answer for the life of the process rather than something to
- * retry (`docs/desktop/AGENT-HARNESS.md`).
+ * retry.
  */
 export async function borrowTools(config: DesktopConfig): Promise<BorrowedTool[]> {
 	// The handshake first: the app's server expects `initialize` before it will list.

@@ -13,7 +13,7 @@
  *
  * The newest version is read from the npm registry, not GitHub's API: the registry does not
  * rate-limit by IP the way GitHub's anonymous API does, and the binaries are released from the
- * same build under the same number (deploy/build-binaries.sh), so the two always agree.
+ * same build under the same number (the release build), so the two always agree.
  */
 
 import { spawn } from 'node:child_process';
@@ -28,7 +28,7 @@ import { INSTALL_SH, NPM_INSTALL, VERSION, installKind, olderThan, type InstallK
 const REGISTRY = process.env.SNOUTDATA_NPM_REGISTRY ?? 'https://registry.npmjs.org';
 const RELEASES = 'https://github.com/snoutdata/app/releases/download';
 
-/** The published asset for a platform, as deploy/build-binaries.sh names it. Null where none is built. */
+/** The published asset for a platform, as the release build names it. Null where none is built. */
 export function assetFor(platform: string, arch: string): string | null {
 	const cpu = arch === 'x64' || arch === 'amd64' ? 'x64' : arch === 'arm64' ? 'arm64' : null;
 	if (!cpu) {

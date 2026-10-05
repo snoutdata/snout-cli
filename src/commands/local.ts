@@ -1,8 +1,8 @@
 /**
  * `snoutdata start` / `stop` / `status` — the same database, on this machine.
  *
- * `docs/cloud/STACK.md` S13. The pod, the egress block, the password rotation and the readiness
- * question all live in `packages/snoutpod/src/local/project.ts`, which is the harness that has
+ * The pod, the egress block, the password rotation and the readiness
+ * question all live in the pod runtime (`@snout/snoutpod/local`), which is the harness that has
  * been running real pods since 2026-09-06, promoted out of its test tier. This file is the
  * COMMAND: where the project's identity is kept, what happens to migrations and a seed on a
  * start, and what a person or an agent is told afterwards.
@@ -22,8 +22,8 @@
  *
  * `LocalPods` below is the whole of what a command needs from the pod runtime, and it is
  * declared HERE, by the consumer, the way `cloudApi.ts` declares what the desktop asks of the
- * cloud. `packages/snoutpod`'s `startLocal`/`stopLocal`/`localStatus` satisfy it structurally.
- * That keeps the published CLI free of a hard dependency on a private package until the two are
+ * cloud. The runtime's `startLocal`/`stopLocal`/`localStatus` satisfy it structurally.
+ * That keeps the published CLI free of a hard dependency on an unpublished package until the two are
  * wired together, and it is what lets everything this file DECIDES be tested with a fake.
  *
  * ## Migrations
@@ -69,14 +69,14 @@ export interface LocalStatus {
  * What this command needs from the pod runtime, and nothing more.
  *
  * Declared by the consumer on purpose (see the header). The implementation is
- * `packages/snoutpod/src/local/project.ts`, which reaches Podman; everything here is decided
+ * the pod runtime, which reaches Podman; everything here is decided
  * against this interface, so the decisions are provable without it.
  */
 export interface LocalPods {
 	/**
 	 * Null when this machine can run a local project; otherwise the sentence saying why not.
 	 * `ref` is the folder's project, or null when there is none yet: the image a project needs
-	 * is the major its volume was made on (docs/cloud/PG18.md, G4).
+	 * is the Postgres major its volume was made on.
 	 */
 	ready(ref: string | null): Promise<string | null>;
 	/**
@@ -106,11 +106,11 @@ export interface LocalPods {
 }
 
 /**
- * What `packages/snoutpod/src/local/project.ts` exports, as this file needs it.
+ * What the pod runtime (`@snout/snoutpod/local`) exports, as this file needs it.
  *
  * Written out here rather than imported as a type, and that is the whole trick: the published
  * CLI is one bundled file with no dependencies, which is most of why `npx snoutdata` is quick,
- * and `@snout/snoutpod` is a private package in this repo. Naming the shape lets everything
+ * and `@snout/snoutpod` is not published to npm. Naming the shape lets everything
  * below be written, typechecked and tested today, and lets the runtime be attached by a build
  * that has the package rather than by an import that would put it on the path of
  * `snoutdata whoami`.
@@ -137,7 +137,7 @@ interface SnoutpodLocal {
  * A package name goes through untouched. A PATH does not, and that is a Windows-only
  * difference that cost a run on 2026-09-11: ESM resolves a bare absolute path on POSIX and
  * refuses `C:\…` outright, so the documented escape hatch (point SNOUTDATA_LOCAL_RUNTIME at
- * `packages/snoutpod/dist/local/project.js`) worked on the Mac and reported the runtime
+ * a built copy of the runtime) worked on the Mac and reported the runtime
  * "not available to this build" on the machine it was written for. Anything that names a file
  * becomes a `file://` URL here, so a path, a relative path and a URL all arrive the same way.
  *
@@ -189,7 +189,7 @@ function loadRuntime(): Promise<unknown> {
  * An override that does not resolve is the caller's own path and is worth quoting back — that is
  * a typo, a stale `dist/`, or a checkout that has not been built. A DEFAULT that does not resolve
  * is a broken build of this CLI, and telling that person to "point SNOUTDATA_LOCAL_RUNTIME at
- * packages/snoutpod" sends somebody who typed `npx snoutdata start` looking for a checkout they
+ * the runtime" sends somebody who typed `npx snoutdata start` looking for a checkout they
  * have no reason to have. Published 0.2.0 said exactly that, to everyone.
  */
 export function runtimeMissing(error: unknown): string {
@@ -206,7 +206,7 @@ export function runtimeMissing(error: unknown): string {
  *
  * Rarely reached: `ensureImage` runs first and pulls it. This is the case where the pull did
  * not happen and the readiness check found the gap anyway, which in practice means a machine
- * that cannot reach ghcr.io. Whatever it says must not be a `cd` into this repository, which
+ * that cannot reach ghcr.io. Whatever it says must not be a `cd` into a source checkout, which
  * is what the runtime said on its own until 2026-09-11 to people who had only ever typed
  * `npx snoutdata`.
  */

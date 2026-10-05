@@ -18,7 +18,9 @@ Everything is driven by one CLI. Nothing needs installing: every command below c
   names the flag it needs (`--force`, `--name`, ...). Unknown flags are errors.
 - **Read the exit code**: 0 ok, 2 wrong command (fix it, do not retry), 3 bad or missing credential
   (ask the user for a token), 4 not ready (retry after a delay), 5 forbidden, 6 not found,
-  7 conflict, 8 plan allowance used up (tell the user), 9 network, 10 timed out, 127 `psql` missing.
+  7 conflict, 8 plan allowance used up (tell the user), 9 network, 10 timed out, 11 CLI out of date
+  (run `npx snoutdata upgrade`), 12 the region is full and nothing was created (tell the user; do
+  not retry in a loop), 127 `psql` missing.
 - **A `DATABASE_URL` contains a live password.** Put it in `.env` or an environment variable, never
   in a committed file, a log, or your reply.
 - **Never pass a secret on a command line.** Set function secrets from stdin:
