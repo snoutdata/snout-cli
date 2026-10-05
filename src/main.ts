@@ -21,7 +21,7 @@ import { stackShow, stackStart, stackStatus, stackStop } from './commands/stack.
 import { localDeploy, localList, localRemove, localSecretsList, localSecretsSet, localSecretsUnset } from './commands/stackFunctions.js';
 import { CliFailure, EXIT, codeForStatus, codeForThrown, missingFile } from './failure.js';
 import { canAsk, interactiveState, setInteractive } from './interactive.js';
-import { clearAuth, initStart, resolveRef, writeAuth, writeLink } from './config.js';
+import { clearAuth, resolveRef, writeAuth, writeLink } from './config.js';
 import { start as deviceStart, waitForApproval } from './device.js';
 import { thisMachine } from './desktop.js';
 import { dim, emit, emitFailure, say, setJsonMode, setQuiet, warn } from './output.js';
@@ -156,8 +156,7 @@ Every command takes --json, --quiet and --help, and anything that waits takes --
 SECONDS. A failure in --json mode is {"ok":false,"code","error"} on stdout, and the exit
 code says the same thing more coarsely: 2 the command was wrong, 3 the credential, 4 not
 ready yet, 5 forbidden, 6 not found, 7 conflict, 8 quota, 9 network, 10 timed out, 11 this
-CLI is out of date ("code":"outdated", run "snoutdata upgrade"), 12 the region is full and
-nothing was created ("code":"no-capacity", do not retry in a loop). "<command> --help"
+CLI is out of date ("code":"outdated", run "snoutdata upgrade"). "<command> --help"
 explains each of a command's flags.
 
 With no credential and a person present, sign-in is offered: SnoutData Studio if it is
@@ -744,28 +743,16 @@ async function run(args: ParsedArgs): Promise<number> {
  * second database. A folder that is already linked is used as it is.
  */
 async function init(args: ParsedArgs): Promise<number> {
-	const start = initStart({ flag: flagString(args, 'ref') });
-	if (start.kind !== 'create') {
-		const existing = start.ref;
-		if (start.kind === 'linked') {
-			say(`This folder is already linked to ${existing}.`);
-		} else if (start.kind === 'environment') {
-			say(`Using ${existing}, from SNOUTDATA_PROJECT. This folder is not linked to it.`);
-		}
+	const existing = resolveRef({ flag: flagString(args, 'ref') });
+	if (existing) {
+		say(`This folder is already linked to ${existing}.`);
 		if (flagBoolean(args, 'env')) {
 			// Linked already is the usual way to arrive here with --env: `init` first, then
 			// wanting the .env. It used to print the URL and leave the file as it was.
 			await writeEnvFor(existing);
-		} else {
-			await db.url(existing);
+			return 0;
 		}
-		// The link is written only once the project answered, so a mistyped ref leaves the
-		// folder as it was rather than linked to a project that does not exist.
-		if (start.kind === 'link') {
-			const stack = localStack(existing);
-			const path = writeLink(process.cwd(), stack ? { ref: existing, ...(stack.name ? { name: stack.name } : {}), local: stack.folder } : { ref: existing });
-			say(`Linked this folder to ${existing}${start.replaces ? `, in place of ${start.replaces}` : ''} (${path}).`);
-		}
+		await db.url(existing);
 		return 0;
 	}
 
@@ -824,8 +811,8 @@ function report(error: unknown): number {
 		return EXIT['not-signed-in'];
 	}
 	if (error instanceof ApiError) {
-		const code = codeForStatus(error.status, error.serverCode);
-		emitFailure(code, error.message, { status: error.status, ...(error.serverCode ? { serverCode: error.serverCode } : {}) });
+		const code = codeForStatus(error.status);
+		emitFailure(code, error.message, { status: error.status });
 		return EXIT[code];
 	}
 	const missing = missingFile(error);
