@@ -6,8 +6,8 @@ import { arrayLiteral, targetFromUrl, toSchema, viaControlPlane } from './gen.js
 /**
  * The half of `gen types` that decides, proven without a database.
  *
- * The emitter itself is tested where it lives (`apps/desktop/src/shared/typescriptTypes.test.ts`,
- * schema in and TypeScript out compared exactly). What is left here is the shaping between the
+ * The emitter itself is tested where it lives, in the desktop app's shared code (schema in and
+ * TypeScript out, compared exactly). What is left here is the shaping between the
  * catalog's JSON and that emitter's input, and the URL parsing that keeps a password off a
  * command line.
  */

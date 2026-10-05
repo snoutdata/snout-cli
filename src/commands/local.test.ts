@@ -10,7 +10,7 @@ import { DEFAULT_PORT, localPath, readLocal, runStart, runtimeSpecifier, sqlRunn
 /**
  * What `snoutdata start` decides, without Podman and without a database.
  *
- * The pod half is proven in `packages/snoutpod/src/local/project.test.ts` against a fake
+ * The pod half is proven in the pod runtime's own tests against a fake
  * runtime, and against a real pod in the `*.pod.ts` tier. What is left here is the command's own
  * business: where a project is recorded, that a second `start` reuses the first one rather than
  * minting a second database, and that nothing is written when the machine cannot run one.
@@ -183,7 +183,7 @@ describe('runStart', () => {
 		}
 	});
 
-	// docs/cloud/PG18.md G4: the image is the major the project's volume was made on, so the
+	// The image is the Postgres major the project's volume was made on, so the
 	// folder's project must reach the image check, and a folder with none asks for a new one's.
 	test("the image is asked for by the folder's project, or for a new one when there is none", async () => {
 		const cwd = scratch();

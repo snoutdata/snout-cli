@@ -1,6 +1,5 @@
 /**
- * `snoutdata push credentials …` — a project's APNs and FCM keys for Snout Push
- * (docs/cloud/PUSH.md).
+ * `snoutdata push credentials …` — a project's APNs and FCM keys for Snout Push.
  *
  * The keys are the customer's own and they live in the project's own database, not in ours:
  * `cloud-project-push` relays them to the project's `/push/v1/credentials`, which PROVES a key

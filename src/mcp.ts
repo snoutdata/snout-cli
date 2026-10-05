@@ -12,7 +12,7 @@
  * **The tool list is fixed at connect.** MCP clients read `tools/list` once, so a tool
  * that appears later is a tool that agent will never see. Everything is therefore static
  * and nothing is registered conditionally on state — the same constraint the desktop's
- * harness records (`docs/desktop/AGENT-HARNESS.md`), and the reason `delete_project` is
+ * agent harness lives with, and the reason `delete_project` is
  * present-but-refusing rather than absent when it is not allowed. An agent that can see it
  * and is told no can tell the user what to turn on; an agent that cannot see it invents
  * something else.
@@ -58,9 +58,9 @@ export interface McpOperations {
 	 * The names of a project's function secrets.
 	 *
 	 * **There is deliberately no `setFunctionSecret` beside it.** Every agent tool call is
-	 * recorded to the AI audit log (`docs/desktop/MCP-SERVER.md`), so a secret passed as a
+	 * recorded to the AI audit log, so a secret passed as a
 	 * tool argument is a secret written into a log with different retention from the table
-	 * it belongs in — which is the rule `SECURITY-ADMIN.md` already enforces for database
+	 * it belongs in — which is the rule the desktop app already enforces for database
 	 * passwords, arrived at from the other direction.
 	 */
 	listFunctionSecrets(ref: string): Promise<unknown>;
@@ -315,8 +315,8 @@ const LOCAL_TOOLS = ['get_connection_url', 'push_migrations', 'get_project', 'li
  * A project row, or a list of them, without the export's download link.
  *
  * The link is a presigned URL to a dump of the WHOLE database, good for hours, and two
- * kilobytes long. `list_projects` and `get_project` handed it to the model on every call
- * (§3n): a credential to every row in a tool that promises "never a password or a key", and
+ * kilobytes long. `list_projects` and `get_project` handed it to the model on every call:
+ * a credential to every row in a tool that promises "never a password or a key", and
  * most of what a small model read in a one-project list. `export_status` still returns it,
  * which is the tool whose description says so.
  */
@@ -369,7 +369,7 @@ export function annotated(tool: ToolDefinition): ToolDefinition {
  * keeps is its business. On 2026-09-07 `tools/list` really did carry
  * `app_list_connections` twice, because the desktop publishes both its built-in database
  * tools and its renderer capability registry and each had a `list_connections`. The same
- * class of defect is recorded in the desktop's own `AGENT-HARNESS.md`, where a duplicate
+ * class of defect once hit the desktop's own agent tools, where a duplicate
  * `get_query_result` was dropped without a word.
  *
  * First one wins, so ours outrank a borrowed tool that collides with them, and a dropped
@@ -500,7 +500,7 @@ async function callTool(
 		return said(id, `${name} needs a project ref. Call list_projects to see them.`, true);
 	}
 	// A local project's ref asked of a cloud tool: one sentence naming the tools that DO work,
-	// not the control plane's 404 or four copies of the CLI's refusal (§3n).
+	// not the control plane's 404 or four copies of the CLI's refusal.
 	const local = ref && operations.localProject ? operations.localProject(ref) : null;
 	if (local && !LOCAL_TOOLS.includes(name)) {
 		return said(

@@ -1,7 +1,7 @@
 /**
  * `status`, `start`, `stop` and `projects show` for a linked LOCAL project (`local.ts`).
  *
- * Compose is called exactly as Studio calls it (`apps/desktop/src/main/localStack/service.ts`):
+ * Compose is called exactly as Studio calls it:
  * `docker compose -p snout-<ref> --project-directory <folder>`, run IN the folder so Compose
  * finds `compose.override.yaml` beside `compose.yaml` on its own. The `-p` is what keeps two
  * projects' containers apart; a project started here is the same project Studio shows.

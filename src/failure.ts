@@ -36,6 +36,10 @@ export type FailureCode =
 	| 'not-found'
 	/** It exists and is not ready yet. The one code that means "ask again shortly". */
 	| 'not-ready'
+	/** The region has no room for a new project right now, and nothing was created. NOT
+	 *  "ask again shortly": room comes from a person adding a host, which takes hours, so a
+	 *  caller that retried this in a loop would be polling a decision nobody has made yet. */
+	| 'no-capacity'
 	/** The state was not what the operation needed: already exists, already running. */
 	| 'conflict'
 	/** A plan limit stopped it. Retrying changes nothing; the plan or the size must. */
@@ -74,6 +78,7 @@ export const EXIT: Record<FailureCode | 'ok', number> = {
 	network: 9,
 	timeout: 10,
 	outdated: 11,
+	'no-capacity': 12,
 	// 127 is the shell's own convention for "command not found", and somebody reading a CI
 	// log knows it on sight. Worth more than a number of ours in sequence.
 	'tool-missing': 127,
@@ -111,13 +116,21 @@ export function fail(code: FailureCode, message: string, details?: Record<string
 }
 
 /**
- * An HTTP status as a failure code.
+ * An HTTP status as a failure code, with the server's own `code` when it sent one.
  *
  * 401 is handled before this by `NotSignedIn`, which carries the server's own words about
  * whether a token was revoked or expired. 504 is ours: it is what `waitForReady` raises
  * when it stops waiting, not something the control plane sends.
+ *
+ * The status alone is not enough for 503. The control plane answers a full region with
+ * 503 `{"code":"no-capacity"}`, and reading only the status turned that into `not-ready`,
+ * exit 4, which this file documents as "ask again shortly": a script obeying the contract
+ * retried a full region in a loop. So a code the server named, and that we know, wins.
  */
-export function codeForStatus(status: number): FailureCode {
+export function codeForStatus(status: number, serverCode?: string | null): FailureCode {
+	if (serverCode === 'no-capacity') {
+		return 'no-capacity';
+	}
 	if (status === 403) {
 		return 'forbidden';
 	}
@@ -152,7 +165,7 @@ export function codeForStatus(status: number): FailureCode {
  *
  * `push credentials set fcm --file x.json` with a typo printed Node's own
  * `ENOENT: no such file or directory, open '<absolute path>'` and exited 1, as if the CLI had
- * broken (§3n). Every `--file`/`--p8` read goes through `readFile`, so this is decided once,
+ * broken. Every `--file`/`--p8` read goes through `readFile`, so this is decided once,
  * here, for all of them.
  */
 export function missingFile(error: unknown): string | null {

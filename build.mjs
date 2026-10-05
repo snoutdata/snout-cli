@@ -3,18 +3,29 @@
 // The CLI is bundled rather than published as a tree of modules because the thing it
 // competes with is `npx` latency: an agent that has to install a dependency graph before
 // it can ask for a database will use something else.
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { existsSync, readFileSync } from 'node:fs';
 import { build } from 'esbuild';
 
 const { version } = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
+
+// SnoutData's own build adds two things a public checkout has no source for: the shared code is
+// copied in fresh before anything compiles (`--prepare`, run first by `npm run build`), and the
+// local pod runtime behind `snoutdata start` is bundled in. Both come from deploy/monorepo.mjs,
+// which is not in the public repository; without it the CLI builds with every command but that
+// one, which then says the runtime is not available to this build.
+const monorepoHook = new URL('./deploy/monorepo.mjs', import.meta.url);
+const monorepo = existsSync(monorepoHook) ? await import(monorepoHook.href) : null;
+if (process.argv.includes('--prepare')) {
+	monorepo?.sync();
+	process.exit(0);
+}
 
 // The Google "Desktop app" OAuth client `snoutdata login` signs in with (src/commands/login.ts).
 // It is not in the source because the source is mirrored to a public repository, where GitHub's
 // push protection refuses a Google client secret. It IS in every bundle, which is what Google
 // expects of an installed app, so a build without it refuses rather than shipping a CLI whose
 // Google sign-in fails. From the environment (the release workflow's secrets), else from a
-// gitignored .env.local beside this file (restored by scripts/dev-env.sh).
+// gitignored .env.local beside this file.
 function googleClient(name) {
 	if (process.env[name]) {
 		return process.env[name];
@@ -29,7 +40,7 @@ function googleClient(name) {
 	} catch {
 		// no .env.local: fall through to the refusal
 	}
-	throw new Error(`${name} is not set (environment or apps/cli/.env.local). \`snoutdata login\` with Google would fail for everyone.`);
+	throw new Error(`${name} is not set (environment or .env.local beside build.mjs). \`snoutdata login\` with Google would fail for everyone.`);
 }
 const googleClientId = googleClient('SNOUTDATA_GOOGLE_CLIENT_ID');
 const googleClientSecret = googleClient('SNOUTDATA_GOOGLE_CLIENT_SECRET');
@@ -60,22 +71,23 @@ await build({
 	},
 	// The local pod runtime goes IN, and this alias is the whole of how.
 	//
-	// `@snout/snoutpod` is a private package in this repo and is not on npm, so a published CLI
+	// `@snout/snoutpod` is not on npm, so a published CLI
 	// that merely IMPORTED it could not resolve it: 0.2.0 answered "the local pod runtime is not
-	// available to this build of the CLI" to every `snoutdata start`, which is the command Phase J
-	// exists for. Aliasing the specifier to the source puts it in the one file instead. It costs
+	// available to this build of the CLI" to every `snoutdata start`, which is the command the local
+	// runtime exists for. Aliasing the specifier to the source puts it in the one file instead. It costs
 	// nothing at startup — `loadRuntime` keeps it behind an `import()` — and it adds no dependency,
 	// because that package has none but `@types/node`.
 	//
 	// The source and not `dist/`, so a build here cannot silently use a stale compile of it.
-	alias: { '@snout/snoutpod/local': fileURLToPath(new URL('../../packages/snoutpod/src/local/project.ts', import.meta.url)) },
+	alias: monorepo ? { '@snout/snoutpod/local': monorepo.localRuntime } : {},
+	external: monorepo ? [] : ['@snout/snoutpod/local'],
 	minify: true,
 	logLevel: 'info'
 });
 
 // Assert what was just built, rather than trusting that it built.
 //
-// `snoutdata start` is the command Phase J exists for, and 0.2.0 shipped unable to run it: the
+// `snoutdata start` is the command the local runtime exists for, and 0.2.0 shipped unable to run it: the
 // runtime was reached through a VARIABLE specifier, which no bundler can follow, so the published
 // file asked every user to point an environment variable at a checkout they do not have. Nothing
 // caught it because every test and every hand-run drove the checkout, where the variable is set.
@@ -93,6 +105,10 @@ await build({
 // compiles the literal `import()` to a deferred init, checked by hand on 2026-09-11), and if it
 // ever became a top-level import the cost would be a PATH walk at startup rather than a broken
 // command — a regression worth avoiding and not worth a brittle assertion against minified output.
+if (!monorepo) {
+	console.log('built without the local pod runtime: `snoutdata start` needs SnoutData\'s own build');
+	process.exit(0);
+}
 const built = readFileSync(new URL('./dist/snoutdata.mjs', import.meta.url), 'utf8');
 const mustContain = 'winget install RedHat.Podman';
 if (!built.includes(mustContain)) {

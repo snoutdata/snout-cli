@@ -140,7 +140,7 @@ function operations(): McpOperations {
 		restoreWindow: (ref) => manage.restoreWindow(ref),
 		restoreTo: (ref, at, name) => manage.restoreTo(ref, at, name),
 		// Waited for, as create_project is: "resumed" while the project is still paused sends an
-		// agent to connect and wait on a wake it thinks has already happened (§3n).
+		// agent to connect and wait on a wake it thinks has already happened.
 		setProjectState: async (verb, ref) => {
 			const asked = await api.call<{ project: api.Project; changed: boolean }>(`cloud-project-${verb}`, { ref });
 			try {

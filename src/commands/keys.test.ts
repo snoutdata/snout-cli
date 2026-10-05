@@ -3,7 +3,7 @@
  *
  * `keys rotate` invalidates every API key the customer has pasted into a deployment, a
  * CI secret or a colleague's `.env`, and nothing can go and update them. Nothing in this
- * CLI prompts (D1), so `--force` is the only thing between an agent's typo and that, and a
+ * CLI prompts when nobody is there to answer, so `--force` is the only thing between an agent's typo and that, and a
  * refusal that reached the network first would already have done the damage.
  *
  * `--force` and not `--yes`: `args.ts` refuses `--yes` by name, because nothing here

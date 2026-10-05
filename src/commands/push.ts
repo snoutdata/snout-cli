@@ -11,7 +11,7 @@
  * **It runs through `psql`, not through the control plane.** `cloud-project-sql` exists
  * and the dashboard's editor uses it, but it refuses DDL, which is what a migration IS.
  * A migration is an ordinary client connecting to an ordinary Postgres, so this is an
- * ordinary connection: credentials fetched because you are signed in (D12), the password
+ * ordinary connection: credentials fetched because you are signed in, the password
  * handed over in the child's environment and never on a command line. The cost is that
  * `psql` has to be installed, and the error says so plainly, the way `db psql` already
  * does.

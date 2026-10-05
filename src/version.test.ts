@@ -18,7 +18,7 @@ describe('how the CLI was installed', () => {
 		assert.equal(installKind({ bun: false, execPath: '/usr/bin/node', script: '/usr/lib/node_modules/snoutdata/dist/snoutdata.mjs' }), 'npm');
 	});
 	test('anything else is source', () => {
-		assert.equal(installKind({ bun: false, execPath: '/usr/bin/node', script: '/repo/apps/cli/dist/snoutdata.mjs' }), 'source');
+		assert.equal(installKind({ bun: false, execPath: '/usr/bin/node', script: '/repo/snout-cli/dist/snoutdata.mjs' }), 'source');
 	});
 });
 
@@ -45,7 +45,7 @@ describe('being out of date', () => {
 });
 
 describe('upgrade', () => {
-	test('asset names match deploy/build-binaries.sh', () => {
+	test('asset names match the release build', () => {
 		assert.equal(assetFor('linux', 'x64'), 'snoutdata-linux-x64');
 		assert.equal(assetFor('darwin', 'arm64'), 'snoutdata-darwin-arm64');
 		assert.equal(assetFor('win32', 'x64'), 'snoutdata-windows-x64.exe');

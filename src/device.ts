@@ -1,7 +1,7 @@
 /**
  * Signing in from a terminal that has no browser.
  *
- * Rung four of the auth ladder (`docs/cli/PLAN.md`, D4). The loopback flow `login` uses cannot
+ * Rung four of the auth ladder (`ladder.ts`). The loopback flow `login` uses cannot
  * serve the cases this exists for: over SSH the callback lands on the wrong machine, in a
  * container there is nothing listening on the host, in CI there is nobody to click. This
  * needs no callback at all, only a code somebody carries to a browser they already have.

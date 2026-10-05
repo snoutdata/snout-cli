@@ -1,6 +1,6 @@
 /**
  * A project running in a self-hosted stack on this machine: the published snout-stack, in
- * Docker, as Studio's Projects panel sets it up (docs/desktop/LOCAL-PROJECTS.md) or as its
+ * Docker, as Studio's Projects panel sets it up or as its
  * README has somebody make it by hand.
  *
  * ## How the CLI reaches one, and why it is this
