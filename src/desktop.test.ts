@@ -8,10 +8,12 @@
 
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { configPath, configPaths, offerFromConfig, readDesktopConfig } from './desktop.js';
+import { configPath, configPaths, listenerIsMine, look, lsofListsAddress, offerFromConfig, procNetListenerUids, readDesktopConfig } from './desktop.js';
 
 test('the config is looked for where Electron actually puts it', () => {
 	const win = configPath('win32', { APPDATA: 'C:\\Users\\joel\\AppData\\Roaming' });
@@ -88,4 +90,61 @@ test('both the installed app and one running from source are looked for', () => 
 
 test('an explicit override replaces both, for a layout neither predicts', () => {
 	assert.deepEqual(configPaths('darwin', { SNOUTDATA_DESKTOP_CONFIG: '/tmp/x.json' }), ['/tmp/x.json']);
+});
+
+test('/proc/net/tcp is read for LISTEN sockets on exactly 127.0.0.1 and the port', () => {
+	const table = [
+		'  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode',
+		'   0: 0100007F:1C8F 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 1 1 0000000000000000 100 0 0 10 0',
+		'   1: 00000000:1C8F 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1002        0 2 1 0000000000000000 100 0 0 10 0',
+		'   2: 0100007F:1C8F 0100007F:D431 01 00000000:00000000 00:00000000 00000000  1003        0 3 1 0000000000000000 100 0 0 10 0',
+		'   3: 0100007F:1C90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1004        0 4 1 0000000000000000 100 0 0 10 0'
+	].join('\n');
+	assert.deepEqual(procNetListenerUids(table, 7311), [1001]);
+	assert.deepEqual(procNetListenerUids(table, 7312), [1004]);
+	assert.deepEqual(procNetListenerUids(table, 7313), []);
+});
+
+test('lsof output counts only a listener on exactly 127.0.0.1 and the port', () => {
+	assert.equal(lsofListsAddress('p1\nf12\nn127.0.0.1:7311\n', 7311), true);
+	assert.equal(lsofListsAddress('p1\nf12\nn*:7311\n', 7311), false);
+	assert.equal(lsofListsAddress('p1\nf12\nn127.0.0.1:73110\n', 7311), false);
+	assert.equal(lsofListsAddress('', 7311), false);
+});
+
+/** A stand-in for whatever holds the port, recording what it was sent. */
+async function listener(): Promise<{ port: number; auths: (string | undefined)[]; close: () => void }> {
+	const auths: (string | undefined)[] = [];
+	const server = createServer((req, res) => {
+		auths.push(req.headers.authorization);
+		res.writeHead(200, { 'content-type': 'application/json' });
+		res.end(JSON.stringify({ signedIn: true, email: 'eve@example.com', canMintToken: true }));
+	});
+	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+	return { port: (server.address() as AddressInfo).port, auths, close: () => server.close() };
+}
+
+test('the token is never sent to a listener that is not this user\'s', async () => {
+	const peer = await listener();
+	try {
+		const result = await look({ port: peer.port, token: 'secret' }, async () => false);
+		assert.deepEqual(result, { available: false, skip: 'not-verified' });
+		assert.deepEqual(peer.auths, [], 'nothing reached the port, the token least of all');
+	} finally {
+		peer.close();
+	}
+});
+
+test('a listener of this user\'s is recognised as one, and then asked', { skip: process.platform !== 'darwin' && process.platform !== 'linux' }, async () => {
+	const peer = await listener();
+	try {
+		assert.equal(await listenerIsMine(peer.port), true);
+		const result = await look({ port: peer.port, token: 'secret' });
+		assert.equal(result.available, true);
+		assert.deepEqual(peer.auths, ['Bearer secret']);
+	} finally {
+		peer.close();
+	}
+	// Nothing listening is a no.
+	assert.equal(await listenerIsMine(peer.port), false);
 });

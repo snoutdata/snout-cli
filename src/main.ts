@@ -168,6 +168,10 @@ A project comes from --ref, then SNOUTDATA_PROJECT, then
 SNOUTDATA_ACCESS_TOKEN, then ~/.snoutdata/auth.json. The session that login writes renews
 itself as it is used; CI, which has no browser to sign in with, wants "tokens create".
 
+psql, pg_dump and pg_restore run by this CLI verify the database's certificate
+(sslmode=verify-full). SNOUTDATA_DB_SSLMODE=require turns that check off, for a network
+that re-signs Postgres traffic.
+
 Docs: https://docs.snoutdata.com/developers/cli
 Examples: https://github.com/snoutdata/snoutdata (a star helps other people find it)
 Source: https://github.com/snoutdata/snout-cli

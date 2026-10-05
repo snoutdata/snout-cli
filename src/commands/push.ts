@@ -33,6 +33,7 @@ import { connection, type Connection } from '../api.js';
 import { bold, emit, say, warn } from '../output.js';
 import { fail } from '../failure.js';
 import { planMigrations, wantsTransaction, type MigrationFile } from '../migrations.js';
+import { pgSslEnv } from '../pgTls.js';
 
 /** How a path reads in a message: relative to here when that is shorter, absolute otherwise. */
 function shown(path: string): string {
@@ -106,7 +107,7 @@ function runSql(details: Connection, sql: string, extra: readonly string[] = [])
 				'-v', 'ON_ERROR_STOP=1',
 				...extra
 			],
-			{ stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: details.password, PGSSLMODE: details.ssl === 'disable' ? 'disable' : 'require' } }
+			{ stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: details.password, ...pgSslEnv(details.ssl) } }
 		);
 		let out = '';
 		let err = '';

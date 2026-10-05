@@ -118,3 +118,9 @@ test('an existing .env keeps what it had', () => {
 	assert.match(contents, /OTHER=1/);
 	assert.match(contents, /DATABASE_URL=postgres:\/\/x/);
 });
+
+test('a .env the CLI creates is readable by this user only', { skip: process.platform === 'win32' }, () => {
+	const directory = scratch();
+	const { path } = writeEnv(directory, 'postgres://x');
+	assert.equal(statSync(path).mode & 0o777, 0o600);
+});
