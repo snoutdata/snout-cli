@@ -93,7 +93,43 @@ const VALUED = new Set([
 	'channel',
 	'since',
 	// `db access grant EMAIL --level full|read`: what a person may do in the database.
-	'level'
+	'level',
+	// `shards --admin <url>`: a standalone Lepis router's admin API, with no SnoutData account.
+	'admin',
+	// `shards --token`: that router's admin token. LEPIS_ADMIN_TOKEN is the better home for it
+	// (see below on credentials and argv); the flag is for a one-off against a test router.
+	'token',
+	// `shards nodes add <name> --host H --port P --dbname D --sslmode M --peer-host H2`.
+	'host',
+	'dbname',
+	'sslmode',
+	'peer-host',
+	// `shards range move <keyspace:lo> --to NODE`, `shards nodes drain <node> --to a,b`.
+	'to',
+	// `shards keyspace create <name> --key-type bigint --ranges 8 --seed S --nodes a,b`.
+	'key-type',
+	'ranges',
+	'seed',
+	'nodes',
+	// `shards table distribute <table> --column C --keyspace K`. `--range LO` names a range by
+	// its bound when that bound starts with a dash, which as a bare word would read as a flag.
+	'column',
+	'keyspace',
+	'range',
+	'node',
+	'value',
+	// `shards scale --add name=host[:port],... --remove N`.
+	'add',
+	'remove',
+	// `shards settings`, or one operation's own override: the cluster's L10 settings.
+	'max-write-pause-ms',
+	'drain-timeout-ms',
+	'ack-timeout-ms',
+	'copy-mb-per-s',
+	// `shards settings --set advice_min_bytes=1,...`: any setting by its API name.
+	'set',
+	// `shards advise --sample-ms N`: how long the advisor measures write rates over.
+	'sample-ms'
 ]);
 
 
@@ -105,7 +141,8 @@ const VALUED = new Set([
 //                         (`--email` came back in 0.10.2 as `login`'s account hint, which
 //                         is not a credential.)
 //   --token               Same reason. The env var exists precisely so a credential is not
-//                         on argv.
+//                         on argv. (`shards --token` is the one exception, for a Lepis router's
+//                         admin token, asked for by name; LEPIS_ADMIN_TOKEN is what to use.)
 //   --project             SNOUTDATA_PROJECT and `link` already answer this, and `--ref` is
 //                         what every command that takes one actually reads.
 //   --output, --limit     Meant something once and never did anything.
@@ -168,9 +205,13 @@ const KNOWN_BOOLEANS = new Set([
 	// `--quiet`: drop the commentary, keep the answer and keep the errors. Wired 2026-09-06;
 	// it parsed and did nothing before.
 	'quiet',
-	// `--yes` is deliberately NOT here. Nothing in this CLI prompts, so there is nothing for
-	// it to answer, and accepting it would tell a script author it had confirmed something.
-	// The command that needs a confirmation says which flag it wants (`db restore --force`).
+	// `--yes`: only `shards` reads it. Its operations that move or delete data ask a person
+	// first and refuse anything else unless it is passed. Every other command refuses it
+	// (main.ts, SHARDS_ONLY), since a yes that confirms nothing would tell a script author it
+	// had; the command that needs a confirmation says which flag it wants (`db restore --force`).
+	'yes',
+	// `shards <operation> --plan`: the dry run, which changes nothing.
+	'plan',
 	// `db export --status`: look at the last copy without asking for another one. The
 	// distinction is worth a flag rather than an inference, because the other branch runs a
 	// pg_dump against somebody's production database.

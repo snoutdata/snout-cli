@@ -32,6 +32,13 @@
  * every call is the same Snout Function the CLI makes, so RLS decides once. It is exactly
  * as capable as the person who started it, minus deleting a database unless they said
  * `--allow-delete`.
+ *
+ * The shards tools take a Cloud project by `project` (its ref) and reach its cluster through
+ * `cloud-project-shards` like every other cloud tool. Without one they are the exception to
+ * "holds no credential": a standalone Lepis router is not an account, so they reach the router
+ * named by LEPIS_ADMIN_URL with LEPIS_ADMIN_TOKEN, both read from the environment it was started
+ * with and never from a tool argument. With those set and no SnoutData sign-in, it serves
+ * anyway: a standalone cluster needs no account (L13).
  */
 
 import * as manage from './manage.js';
@@ -43,6 +50,7 @@ import { runPush } from './push.js';
 import { runDeploy, runList, runRemove, runSize } from './functions.js';
 import { localFunctions, localSecretNames, runLocalDeploy, runLocalRemove } from './stackFunctions.js';
 import { readStack, studioProjects } from '../local.js';
+import { shardsClient, type ShardsClient } from '../shardsClient.js';
 import { findLink } from '../config.js';
 import { resolve } from 'node:path';
 
@@ -56,7 +64,23 @@ function operations(): McpOperations {
 	// A local project (`snoutdata link --local`, or one Studio set up) answers from its stack
 	// folder, as the CLI's own commands do; the cloud tools refuse its ref in mcp.ts.
 	const local = (ref: string) => api.localStack(ref);
+	let shards: ShardsClient | undefined;
 	return {
+		// A Cloud project's cluster by its ref, as the person who started this server; otherwise the
+		// standalone router from the environment, built on first use so a server without one never
+		// needs one.
+		shards: (project) => {
+			if (project !== undefined) {
+				return shardsClient({ project });
+			}
+			if (!process.env.LEPIS_ADMIN_URL) {
+				throw new Error(
+					"The shards tools need a cluster: pass project (a SnoutData Cloud project's ref, from list_projects), or start snoutdata mcp with LEPIS_ADMIN_URL (a standalone router's admin API, e.g. http://127.0.0.1:7432) and LEPIS_ADMIN_TOKEN set."
+				);
+			}
+			shards ??= shardsClient({});
+			return shards;
+		},
 		whoami: () => api.whoami(),
 		// The local projects beside the hosted ones, or an agent has no way to learn a local ref.
 		listProjects: async () => ({ ...(await api.listProjects()), local: localProjects() }),
@@ -262,8 +286,13 @@ export async function serve(options: Omit<McpOptions, 'version'> & { version: st
 		warn(`snoutdata mcp: signed in as ${who.email ?? 'this account'}.`);
 	} catch (error) {
 		warn(`snoutdata mcp: ${error instanceof Error ? error.message : String(error)}`);
-		warn('Sign in with `snoutdata login`, or set SNOUTDATA_ACCESS_TOKEN.');
-		return 3;
+		if (!process.env.LEPIS_ADMIN_URL) {
+			warn('Sign in with `snoutdata login`, or set SNOUTDATA_ACCESS_TOKEN.');
+			return 3;
+		}
+		// A standalone Lepis cluster needs no account: serve its tools, and let the cloud ones
+		// say what they need when they are called.
+		warn(`snoutdata mcp: not signed in, so only the shards tools will work (router ${process.env.LEPIS_ADMIN_URL}).`);
 	}
 
 	// Reported once, on stderr, because a person who ran this by hand in a terminal sees

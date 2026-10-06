@@ -301,7 +301,7 @@ export function arrayLiteral(values: readonly string[]): string {
 }
 
 /** What the query gives back, before it is a {@link DatabaseSchema}. */
-interface RawIntrospection {
+export interface RawIntrospection {
 	tables: Array<{
 		name: string;
 		schema: string;
@@ -406,8 +406,119 @@ export interface GenResult {
 	enums: number;
 	/** Where it was written, or null when it went to stdout. */
 	path: string | null;
+	/**
+	 * How a sharded project (snout-lepis) spreads the tables read: each one Lepis knows, with its
+	 * shard key when it is sharded. Empty for every other database. The types are the same either
+	 * way; this is for a caller that wants to know which filter keeps a query on one node.
+	 */
+	distribution: Distribution[];
 	/** The file itself. */
 	types: string;
+}
+
+/** One table of a sharded project, as `lepis.relation` on its home node describes it. */
+export interface Distribution {
+	schema: string;
+	table: string;
+	/** `sharded` (rows by key over the nodes), `reference` (a copy on each), `global` (home only). */
+	kind: string;
+	/** The shard key of a sharded table; null for the others. */
+	keyColumn: string | null;
+}
+
+/**
+ * Whether the database is a sharded project's home node: it holds Lepis's catalog. Read from
+ * `pg_class`, which needs no privilege on the `lepis` schema, so asking never fails.
+ *
+ * A sharded project's home node holds every table's DEFINITION, sharded or not, and the
+ * introspection reads only `pg_catalog`, which a Lepis router answers from home: each table is
+ * read once, on one node. The catalog adds which tables are spread and by what.
+ */
+const HAS_LEPIS = `select exists (
+  select from pg_class c join pg_namespace n on n.oid = c.relnamespace
+  where n.nspname = 'lepis' and c.relname = 'relation'
+)::text`;
+
+const LEPIS_RELATIONS = `select coalesce(json_agg(json_build_object(
+  'schema', schema_name, 'table', table_name, 'kind', kind, 'keyColumn', key_column
+) order by schema_name, table_name), '[]'::json)::text from lepis.relation`;
+
+/**
+ * The introspection's answer, which is one JSON document per line. One from a single Postgres;
+ * more than one only when something answered from every node (a router fanning a catalog query
+ * out), and then the documents describe the same tables, so they are merged with each table,
+ * function and enum kept once. A line that is not JSON makes the whole answer unreadable.
+ */
+export function parseIntrospection(text: string): RawIntrospection | null {
+	const docs: RawIntrospection[] = [];
+	for (const line of text.split(/\r?\n/)) {
+		const one = line.trim();
+		if (!one) {
+			continue;
+		}
+		try {
+			docs.push(JSON.parse(one) as RawIntrospection);
+		} catch {
+			return null;
+		}
+	}
+	if (docs.length === 0) {
+		return null;
+	}
+	return mergeIntrospections(docs);
+}
+
+/** Several answers as one, each table (by schema and name), function (by signature) and enum once. */
+export function mergeIntrospections(docs: readonly RawIntrospection[]): RawIntrospection {
+	const once = <T>(lists: readonly (readonly T[] | undefined)[], key: (one: T) => string): T[] => {
+		const seen = new Set<string>();
+		const out: T[] = [];
+		for (const list of lists) {
+			for (const one of list ?? []) {
+				const k = key(one);
+				if (!seen.has(k)) {
+					seen.add(k);
+					out.push(one);
+				}
+			}
+		}
+		return out;
+	};
+	return {
+		tables: once(docs.map((d) => d.tables), (t) => `${t.schema}.${t.name}`),
+		routines: once(
+			docs.map((d) => d.routines),
+			(r) => `${r.schema}.${r.name}(${(r.parameters ?? []).map((p) => `${p.mode} ${p.dataType}`).join(',')})`
+		),
+		enums: once(docs.map((d) => d.enums), (e) => `${e.schema}.${e.name}`)
+	};
+}
+
+/**
+ * A sharded project's tables in the schemas read, from its catalog; empty when the database has
+ * none, or when it cannot be read (the types do not depend on it, so it never fails the command).
+ */
+export async function readDistribution(
+	run: (sql: string) => Promise<{ code: number; out: string; err: string }>,
+	schemas: readonly string[]
+): Promise<Distribution[]> {
+	const present = await run(HAS_LEPIS);
+	if (present.code !== 0 || present.out.trim() !== 'true') {
+		return [];
+	}
+	const answer = await run(LEPIS_RELATIONS);
+	if (answer.code !== 0) {
+		return [];
+	}
+	try {
+		const rows = JSON.parse(answer.out.trim()) as Distribution[];
+		const wanted = new Set(schemas);
+		return rows
+			.filter((one) => wanted.has(one.schema))
+			.map((one) => ({ schema: one.schema, table: one.table, kind: one.kind, keyColumn: one.keyColumn ?? null }));
+	} catch {
+		return [];
+	}
 }
 
 /** Do the work and say nothing. */
@@ -415,11 +526,25 @@ export async function generateTypes(options: GenOptions): Promise<GenResult> {
 	const schemas = options.schemas && options.schemas.length > 0 ? [...options.schemas] : ['public'];
 	const target = options.dbUrl ? targetFromUrl(options.dbUrl) : fromConnection(await connection(refOf(options)));
 
+	// psql, or with none on this machine the control plane for a hosted project; chosen once.
+	let viaPlane = false;
+	const run = async (sql: string): Promise<{ code: number; out: string; err: string }> => {
+		if (options.sql) {
+			return options.sql(sql);
+		}
+		if (viaPlane && options.ref) {
+			return viaControlPlane(options.ref, sql);
+		}
+		const answer = await runPsql(target, sql);
+		if (answer.code === 127 && !options.dbUrl && options.ref) {
+			viaPlane = true;
+			return viaControlPlane(options.ref, sql);
+		}
+		return answer;
+	};
+
 	const introspect = INTROSPECT.replace('$SCHEMAS$', arrayLiteral(schemas));
-	let result = await (options.sql ? options.sql(introspect) : runPsql(target, introspect));
-	if (result.code === 127 && !options.sql && !options.dbUrl && options.ref) {
-		result = await viaControlPlane(options.ref, introspect);
-	}
+	const result = await run(introspect);
 	if (result.code === 127) {
 		fail('tool-missing', result.err.trim());
 	}
@@ -430,12 +555,11 @@ export async function generateTypes(options: GenOptions): Promise<GenResult> {
 	if (!text) {
 		fail('failed', `${target.label} returned nothing for the schema query`);
 	}
-	let raw: RawIntrospection;
-	try {
-		raw = JSON.parse(text) as RawIntrospection;
-	} catch {
+	const raw = parseIntrospection(text);
+	if (!raw) {
 		fail('failed', `could not read the schema of ${target.label}: the answer was not JSON`);
 	}
+	const distribution = await readDistribution(run, schemas);
 
 	const { schema, enums } = toSchema(raw, target.database, Date.now());
 	const types = emitTypeScriptTypes(schema, {
@@ -457,6 +581,7 @@ export async function generateTypes(options: GenOptions): Promise<GenResult> {
 		functions: (schema.routines ?? []).length,
 		enums: enums.length,
 		path,
+		distribution,
 		types
 	};
 }
