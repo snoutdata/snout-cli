@@ -30,7 +30,22 @@
  *
  * And it holds no credential of its own: it runs as whoever started it, and every call is
  * the same Snout Function the CLI calls, so RLS decides once, in the database.
+ *
+ * ## The shards tools
+ *
+ * `shards_*` drive a Lepis cluster (Phase 8) through the same client
+ * `snoutdata shards` uses: a SnoutData Cloud project's when the tool is given `project` (its ref;
+ * through `cloud-project-shards`, as the person who started this server), and otherwise the
+ * router named by LEPIS_ADMIN_URL with LEPIS_ADMIN_TOKEN, which never appears in a tool
+ * argument. The one rule they add: **no surprise cutovers.**
+ * `shards_run` without `confirm: true` returns the plan and runs nothing, and with it runs only
+ * an operation this server has planned (shards_plan, shards_advice, or an unconfirmed
+ * shards_run) in the last fifteen minutes, so the plan an agent shows its user is the plan of
+ * what runs. A run forgets its plan: running it again needs a new one. A plan is remembered for
+ * the cluster it was made against, so a plan for one project never confirms a run on another.
  */
+
+import { isFinished, type Job, type OpBody, type Plan, type ShardsClient } from './shardsClient.js';
 
 /** What the tools need from the outside world. Every one of these is impure. */
 export interface McpOperations {
@@ -78,6 +93,12 @@ export interface McpOperations {
 	/** Forward a borrowed tool to the desktop app. Absent when there is no app. */
 	callBorrowed?(name: string, args: unknown): Promise<unknown>;
 	/**
+	 * The Lepis cluster the shards tools drive: a SnoutData Cloud project's, by its ref, or with
+	 * none the standalone router from LEPIS_ADMIN_URL and LEPIS_ADMIN_TOKEN. Throws the sentence
+	 * saying what to set when neither is there. Absent: none ever is.
+	 */
+	shards?(project?: string): ShardsClient;
+	/**
 	 * The self-hosted stack on this machine that `ref` names (`snoutdata link --local`), or null.
 	 * Absent means no local projects at all, which is what the tests mostly want.
 	 */
@@ -98,7 +119,76 @@ export interface McpOptions {
 	 * that cannot be served is a result rather than a vanishing capability.
 	 */
 	readonly borrowed?: readonly ToolDefinition[];
+	/** The plans this server has shown, so shards_run runs only what was planned first. */
+	readonly shardsPlans?: PlanMemory;
+	/** How often shards_watch_job looks at a job. */
+	readonly shardsPollMs?: number;
 }
+
+/** JSON with its object keys sorted, so the same operation is the same text however it was written. */
+export function canonical(value: unknown): string {
+	if (Array.isArray(value)) {
+		return `[${value.map(canonical).join(',')}]`;
+	}
+	if (value && typeof value === 'object') {
+		const record = value as Record<string, unknown>;
+		return `{${Object.keys(record)
+			.filter((key) => record[key] !== undefined)
+			.sort()
+			.map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`)
+			.join(',')}}`;
+	}
+	return JSON.stringify(value) ?? 'null';
+}
+
+/** The operations this server has planned, and when. Fifteen minutes, then a plan is stale. */
+export class PlanMemory {
+	readonly #shown = new Map<string, number>();
+	readonly #ttlMs: number;
+	readonly #now: () => number;
+
+	constructor(ttlMs = 15 * 60_000, now: () => number = Date.now) {
+		this.#ttlMs = ttlMs;
+		this.#now = now;
+	}
+
+	/** `cluster`: which cluster it was planned against (a project ref, or '' for the standalone router). */
+	remember(body: OpBody, cluster = ''): void {
+		this.#shown.set(`${cluster}\n${canonical(body)}`, this.#now());
+	}
+
+	shown(body: OpBody, cluster = ''): boolean {
+		const at = this.#shown.get(`${cluster}\n${canonical(body)}`);
+		return at !== undefined && this.#now() - at <= this.#ttlMs;
+	}
+
+	forget(body: OpBody, cluster = ''): void {
+		this.#shown.delete(`${cluster}\n${canonical(body)}`);
+	}
+}
+
+/** The one a server uses when it was not handed its own. */
+const PLANS = new PlanMemory();
+
+/** The operations a Lepis router takes (`GET /v1/ops`). */
+export const SHARD_OPS = [
+	'node.add',
+	'node.drain',
+	'node.remove',
+	'keyspace.create',
+	'table.distribute',
+	'table.reference',
+	'table.global',
+	'range.split',
+	'range.merge',
+	'range.move',
+	'tenant.pin',
+	'rebalance',
+	'scale',
+	'verify',
+	'cleanup',
+	'node.attach'
+] as const;
 
 /** The version of the MCP spec this speaks. Echoed back in the handshake. */
 export const PROTOCOL_VERSION = '2024-11-05';
@@ -134,6 +224,20 @@ function object(properties: Record<string, unknown>, required: string[] = []): R
 }
 
 const STRING = { type: 'string' };
+
+const OPERATION = {
+	type: 'object',
+	description:
+		'The operation as the router takes it, e.g. {"op": "range.split", "keyspace": "k", "range": "-3074457345618258603", "at": "18454348402311335", "to": 3}. Range bounds and seeds are 64-bit, so pass them as strings. shards_advice returns these ready-made, as `operation`. For a SnoutData Cloud project a node is a pod the project makes: {"op": "node.add"} makes one (no host), {"op": "node.attach", "name": "<its ref>"} hands a ready one to the cluster, and {"op": "scale", "nodes": N} is a node count.',
+	properties: { op: { type: 'string', enum: [...SHARD_OPS] } },
+	required: ['op'],
+	additionalProperties: true
+};
+const JOB_ID = { type: 'integer', description: 'The job id shards_run returned, or one from shards_jobs.' };
+const PROJECT = {
+	type: 'string',
+	description: "A SnoutData Cloud project's ref (from list_projects): its cluster, as the signed-in user. Omit for the standalone router this server was started with (LEPIS_ADMIN_URL)."
+};
 
 /**
  * Every tool, always, whatever the flags say.
@@ -295,6 +399,51 @@ export const TOOLS: readonly ToolDefinition[] = [
 		inputSchema: object({ ref: STRING, at: STRING, name: STRING }, ['ref', 'at'])
 	},
 	{
+		name: 'shards_status',
+		description:
+			"A Lepis cluster (one Postgres database spread over several nodes): a Cloud project's with project, else the router this server was started against with LEPIS_ADMIN_URL. Its nodes, keyspaces and their ranges (a range is keyspace:lo; bounds are strings), tables, routers, unfinished jobs and settings; for a Cloud project also whether it is sharded, its plan's node limit, and each node pod with the step that follows (attach, delete-pod, wait). Costs nothing.",
+		inputSchema: object({ project: PROJECT })
+	},
+	{
+		name: 'shards_advice',
+		description:
+			"Ask the cluster's advisor what to split, move or add, from each node's size, connections and write rate and each range's measured share. Each recommendation has a reason, its plan, and an `operation` that shards_run takes as it is. RUNS NOTHING. sampleMs: how long to measure write rates over (the cluster's setting by default; 0 skips them; at most 30000).",
+		inputSchema: object({ project: PROJECT, sampleMs: { type: 'integer' } })
+	},
+	{
+		name: 'shards_plan',
+		description:
+			'The dry run of one cluster operation: its steps, what moves where, rows, bytes, the estimated copy time and the expected write pause. Changes nothing. Planning an operation is what lets shards_run run it.',
+		inputSchema: object({ project: PROJECT, operation: OPERATION }, ['operation'])
+	},
+	{
+		name: 'shards_run',
+		description:
+			"Run one cluster operation as a durable job. IT MOVES DATA, and each cutover pauses writes to what moves for up to the cluster's max_write_pause_ms. Without confirm: true it only returns the plan and runs nothing: show that plan to the user, and when they agree call again with the same operation and confirm: true. confirm runs only an operation planned here (shards_plan, shards_advice, or shards_run without confirm) in the last 15 minutes. Returns the job id; follow it with shards_watch_job.",
+		inputSchema: object({ project: PROJECT, operation: OPERATION, confirm: { type: 'boolean' } }, ['operation'])
+	},
+	{
+		name: 'shards_jobs',
+		description: "The cluster's latest jobs, or with id one job with each step's state and phase. Costs nothing.",
+		inputSchema: object({ project: PROJECT, id: JOB_ID })
+	},
+	{
+		name: 'shards_watch_job',
+		description:
+			'Wait for a job to finish, up to timeoutSeconds (default 30, at most 120), and return its state and steps: done, failed (with the error; shards_resume_job runs it again from the failed step) or cancelled. Running out of time stops the waiting, never the job; call again to keep waiting.',
+		inputSchema: object({ project: PROJECT, id: JOB_ID, timeoutSeconds: { type: 'integer' } }, ['id'])
+	},
+	{
+		name: 'shards_cancel_job',
+		description: 'Stop a running job. A move cancelled before its cutover rolls back; one cancelled after it finishes its cleanup.',
+		inputSchema: object({ project: PROJECT, id: JOB_ID }, ['id'])
+	},
+	{
+		name: 'shards_resume_job',
+		description: 'Run a failed job again from the step that failed. It carries on the operation that was already approved and planned; follow it with shards_watch_job.',
+		inputSchema: object({ project: PROJECT, id: JOB_ID }, ['id'])
+	},
+	{
 		name: 'delete_project',
 		description: 'Delete a project. THIS DESTROYS A DATABASE. Off unless the person who started this server passed --allow-delete, in which case it still only marks the project deleted and its data is erasable for a grace period.',
 		inputSchema: object({ ref: STRING }, ['ref'])
@@ -304,9 +453,10 @@ export const TOOLS: readonly ToolDefinition[] = [
 /** The tools that only read. Every other one changes something, and says so to the client. */
 const READ_ONLY_TOOLS = new Set([
 	'whoami', 'list_projects', 'get_connection_url', 'usage', 'export_status', 'list_teams', 'list_tokens',
-	'list_functions', 'list_function_secrets', 'get_project', 'list_products', 'list_domains', 'restore_window'
+	'list_functions', 'list_function_secrets', 'get_project', 'list_products', 'list_domains', 'restore_window',
+	'shards_status', 'shards_advice', 'shards_plan', 'shards_jobs', 'shards_watch_job'
 ]);
-const DESTRUCTIVE_TOOLS = new Set(['delete_project', 'delete_function', 'reset_password', 'revoke_token', 'remove_domain']);
+const DESTRUCTIVE_TOOLS = new Set(['delete_project', 'delete_function', 'reset_password', 'revoke_token', 'remove_domain', 'shards_run']);
 
 /** The tools that work on a LOCAL project's ref (`snoutdata link --local`). Every other one is about SnoutData Cloud. */
 const LOCAL_TOOLS = ['get_connection_url', 'push_migrations', 'get_project', 'list_functions', 'deploy_function', 'delete_function', 'list_function_secrets'];
@@ -409,6 +559,222 @@ export function expiryDays(iso: string, now = new Date()): number | null {
 	return Math.ceil((at - now.getTime()) / 86_400_000);
 }
 
+/** A plan with what a person decides on, and without its step arguments. */
+export function planView(plan: Plan): Record<string, unknown> {
+	return {
+		op: plan.op,
+		cutovers: plan.cutovers,
+		moves: (plan.moves ?? []).map((move) => ({
+			from: move.source,
+			to: move.targets,
+			tables: move.tables,
+			estimated_rows: move.estimated_rows,
+			estimated_bytes: move.estimated_bytes,
+			estimated_copy_seconds: move.estimated_copy_seconds,
+			expected_pause_ms: move.expected_pause_ms
+		})),
+		steps: (plan.steps ?? []).map((step) => step.kind),
+		estimated_rows: plan.estimated_rows,
+		estimated_bytes: plan.estimated_bytes,
+		estimated_copy_seconds: plan.estimated_copy_seconds,
+		expected_pause_ms: plan.expected_pause_ms,
+		max_write_pause_ms: plan.max_write_pause_ms,
+		warnings: plan.warnings ?? [],
+		...(plan.assumptions ? { assumptions: plan.assumptions } : {})
+	};
+}
+
+/** A job as a model needs it: where it is, and why it stopped if it did. */
+export function jobView(job: Job): Record<string, unknown> {
+	return {
+		id: job.id,
+		op: job.op,
+		state: job.state,
+		finished: isFinished(job.state),
+		error: job.error,
+		steps: job.steps.map((step) => ({
+			n: step.n + 1,
+			kind: step.kind,
+			state: step.state,
+			...(typeof step.detail?.phase === 'string' ? { phase: step.detail.phase } : {})
+		})),
+		...(job.state === 'failed' ? { next: `shards_resume_job {"id": ${job.id}} runs it again from the failed step.` } : {})
+	};
+}
+
+/** The operation a shards tool was given, or the sentence saying what is wrong with it. */
+function operationArg(args: Record<string, unknown>, tool: string): OpBody | string {
+	const operation = args.operation;
+	if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {
+		return `${tool} needs operation: an object like {"op": "range.split", "keyspace": "k", "range": "<lo>"}. shards_advice returns them ready-made.`;
+	}
+	const body = operation as Record<string, unknown>;
+	if (typeof body.op !== 'string' || !(SHARD_OPS as readonly string[]).includes(body.op)) {
+		return `${tool}: operation.op must be one of ${SHARD_OPS.join(', ')}.`;
+	}
+	for (const key of ['range', 'at', 'a', 'b', 'seed']) {
+		const value = body[key];
+		if (typeof value === 'number' && !Number.isSafeInteger(value)) {
+			return `${tool}: operation.${key} is a 64-bit number and lost its last digits as a JSON number. Pass it as a string, exactly as shards_status or shards_advice wrote it.`;
+		}
+	}
+	return body as OpBody;
+}
+
+function jobIdArg(args: Record<string, unknown>): number | null {
+	const value = typeof args.id === 'string' && /^\d+$/.test(args.id) ? Number(args.id) : args.id;
+	return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+/** A router's refusal, with its stable kind beside the sentence so a model can branch on it. */
+function shardsFailure(error: unknown): unknown {
+	const message = error instanceof Error ? error.message : String(error);
+	const kind = (error as { details?: { kind?: unknown } } | null)?.details?.kind;
+	return typeof kind === 'string' ? { error: message, kind } : message;
+}
+
+const NO_ROUTER =
+	"The shards tools need a cluster: pass project (a SnoutData Cloud project's ref), or start this server with LEPIS_ADMIN_URL (a standalone router's admin API, e.g. http://127.0.0.1:7432) and LEPIS_ADMIN_TOKEN set. Tell the user that is what is missing.";
+
+async function shardsTool(
+	id: number | string | null,
+	name: string,
+	args: Record<string, unknown>,
+	operations: McpOperations,
+	options: McpOptions
+): Promise<JsonRpcResponse> {
+	let client: ShardsClient;
+	const project = typeof args.project === 'string' && args.project.trim() !== '' ? args.project.trim() : undefined;
+	try {
+		if (!operations.shards) {
+			return said(id, NO_ROUTER, true);
+		}
+		client = operations.shards(project);
+	} catch (error) {
+		return said(id, error instanceof Error ? error.message : String(error), true);
+	}
+	const plans = options.shardsPlans ?? PLANS;
+	// A plan confirms a run on the cluster it was made against, and no other.
+	const cluster = project ?? '';
+	try {
+		switch (name) {
+			case 'shards_status':
+				return said(id, await client.status());
+			case 'shards_advice': {
+				const sampleMs = typeof args.sampleMs === 'number' && args.sampleMs >= 0 ? Math.min(Math.floor(args.sampleMs), 30_000) : undefined;
+				const advice = await client.advice(sampleMs);
+				for (const one of advice.advice) {
+					if (one.plan) {
+						plans.remember(one.request, cluster);
+					}
+				}
+				return said(id, {
+					summary: advice.summary,
+					advice: advice.advice.map((one) => ({
+						op: one.op,
+						reason: one.reason,
+						metric: one.metric,
+						operation: one.request,
+						...(one.plan ? { plan: planView(one.plan) } : {}),
+						...(one.needs.length > 0 ? { needs: one.needs, note: `Ask the user for ${one.needs.join(', ')}, then plan it with shards_plan.` } : {}),
+						...(one.plan_error ? { plan_error: one.plan_error } : {})
+					})),
+					facts: advice.facts,
+					assumptions: advice.assumptions,
+					...(advice.advice.length > 0
+						? { next: 'Nothing has run. Show the user a recommendation and its plan; if they agree, call shards_run with its operation and confirm: true. Ask for advice again after each one runs.' }
+						: {})
+				});
+			}
+			case 'shards_plan': {
+				const body = operationArg(args, name);
+				if (typeof body === 'string') {
+					return said(id, body, true);
+				}
+				const plan = await client.plan(body);
+				plans.remember(body, cluster);
+				return said(id, { plan: planView(plan), next: 'Nothing has run. To run it, show the user this plan, then call shards_run with the same operation and confirm: true.' });
+			}
+			case 'shards_run': {
+				const body = operationArg(args, name);
+				if (typeof body === 'string') {
+					return said(id, body, true);
+				}
+				if (args.confirm !== true || !plans.shown(body, cluster)) {
+					const plan = await client.plan(body);
+					plans.remember(body, cluster);
+					const unplanned = args.confirm === true;
+					return said(
+						id,
+						{
+							ran: false,
+							plan: planView(plan),
+							next: unplanned
+								? 'NOT RUN: confirm applies to an operation planned here in the last 15 minutes, and this one was not, so it has been planned now instead. Show the user this plan; if they agree, call shards_run again with the same operation and confirm: true.'
+								: 'Nothing has run. Show the user this plan; if they agree, call shards_run again with the same operation and confirm: true.'
+						},
+						unplanned
+					);
+				}
+				const submitted = await client.submit(body);
+				plans.forget(body, cluster);
+				// The Cloud made or deleted a pod: done, with no job to follow.
+				if (submitted.job === undefined) {
+					return said(id, { ran: true, done: submitted.done, answer: submitted.answer });
+				}
+				return said(id, {
+					ran: true,
+					job: submitted.job,
+					plan: planView(submitted.plan),
+					next: `Follow it with shards_watch_job {"id": ${submitted.job}}.`
+				});
+			}
+			case 'shards_jobs': {
+				if (args.id === undefined) {
+					return said(id, { jobs: await client.jobs() });
+				}
+				const jobId = jobIdArg(args);
+				if (jobId === null) {
+					return said(id, 'shards_jobs: id is a job number. Call it without id to list them.', true);
+				}
+				const job = await client.job(jobId);
+				return said(id, { ...jobView(job), plan: job.plan && Array.isArray(job.plan.steps) ? planView(job.plan) : null });
+			}
+			case 'shards_watch_job': {
+				const jobId = jobIdArg(args);
+				if (jobId === null) {
+					return said(id, 'shards_watch_job needs id, the job number shards_run returned.', true);
+				}
+				const seconds = typeof args.timeoutSeconds === 'number' && args.timeoutSeconds > 0 ? Math.min(args.timeoutSeconds, 120) : 30;
+				const deadline = Date.now() + seconds * 1000;
+				for (;;) {
+					const job = await client.job(jobId);
+					if (isFinished(job.state)) {
+						return said(id, jobView(job), job.state !== 'done');
+					}
+					if (Date.now() >= deadline) {
+						return said(id, { ...jobView(job), note: `Still ${job.state} after ${seconds}s. It carries on; call shards_watch_job again to keep waiting.` });
+					}
+					await new Promise((resolve) => setTimeout(resolve, options.shardsPollMs ?? 1000));
+				}
+			}
+			case 'shards_cancel_job':
+			case 'shards_resume_job': {
+				const jobId = jobIdArg(args);
+				if (jobId === null) {
+					return said(id, `${name} needs id, a job number.`, true);
+				}
+				const result = name === 'shards_cancel_job' ? await client.cancel(jobId) : await client.resume(jobId);
+				return said(id, { ...result, next: `Follow it with shards_watch_job {"id": ${jobId}}.` });
+			}
+			default:
+				return fail(id, -32602, `unknown tool: ${name}`);
+		}
+	} catch (error) {
+		return said(id, shardsFailure(error), true);
+	}
+}
+
 function stringArg(params: Record<string, unknown>, name: string): string | null {
 	const value = params[name];
 	return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
@@ -495,6 +861,9 @@ async function callTool(
 		'restore_window',
 		'restore_to_point'
 	];
+	if (name.startsWith('shards_') && TOOLS.some((tool) => tool.name === name)) {
+		return shardsTool(id, name, args, operations, options);
+	}
 	const ref = stringArg(args, 'ref');
 	if (needsRef.includes(name) && !ref) {
 		return said(id, `${name} needs a project ref. Call list_projects to see them.`, true);

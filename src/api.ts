@@ -29,10 +29,13 @@ export class ApiError extends Error {
 	 *  `quota`). The status says how bad; this says which thing, and `codeForStatus`
 	 *  reads it so a full region is not reported as "try again shortly". */
 	readonly serverCode: string | null;
-	constructor(status: number, message: string, serverCode: string | null = null) {
+	/** The refusal's whole body, for a caller that reads a field beside `error` (a router's `kind`). */
+	readonly body?: unknown;
+	constructor(status: number, message: string, serverCode: string | null = null, body?: unknown) {
 		super(message);
 		this.status = status;
 		this.serverCode = serverCode;
+		this.body = body;
 	}
 }
 
@@ -230,7 +233,7 @@ export async function call<T>(
 			typeof parsed === 'object' && parsed && 'code' in parsed && typeof (parsed as { code: unknown }).code === 'string'
 				? (parsed as { code: string }).code
 				: null;
-		throw new ApiError(response.status, message, serverCode);
+		throw new ApiError(response.status, message, serverCode, parsed);
 	}
 	return parsed as T;
 }

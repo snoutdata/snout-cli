@@ -43,6 +43,7 @@ import { livePods, localSql, start, status as localStatus, stop } from './comman
 import { serve as serveMcp } from './commands/mcp.js';
 import { findStack, type LocalStack } from './local.js';
 import { usage } from './commands/usage.js';
+import { shards } from './commands/shards.js';
 
 import { upgrade } from './commands/upgrade.js';
 import { expecting, sameEmail } from './commands/login.js';
@@ -148,6 +149,23 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata db restore --window [--ref R]      how far back a point-in-time restore can go
   snoutdata db restore --at TIME [--name N]    that moment, into a NEW project beside this one
 
+  snoutdata shards --admin URL [status]     a Lepis cluster (Postgres over several nodes), from its
+                                           router's admin API; the token from LEPIS_ADMIN_TOKEN
+  snoutdata shards --project REF ...       the same, for a SnoutData Cloud project, as you; there
+                                           enable turns it on, nodes add makes a node pod, nodes
+                                           attach REF hands a ready one over, scale --nodes N
+  snoutdata shards nodes [add|drain|remove] | keyspace create | table distribute|reference|global
+                   range split|merge|move | tenant pin | rebalance | scale | verify | cleanup
+                                           each with --plan for the dry run (size, copy time,
+                                           expected pause); one that moves or deletes data asks,
+                                           or takes --yes. Waits for its job unless --no-wait
+  snoutdata shards plan <operation>        the same dry run
+  snoutdata shards jobs [show|watch|cancel|resume <id>]   the durable job log
+  snoutdata shards settings [--max-write-pause-ms N ...] [--set advice_min_bytes=N,...]
+                                           the cluster's cutover and advisor settings
+  snoutdata shards advise [--sample-ms N]  what to split, move or add, each with its reason, its
+                                           plan and the command that runs it; runs nothing
+
   snoutdata mcp [--allow-delete]           serve these operations to an agent, over stdio
                                            (plus SnoutData Studio's own tools, when it is
                                             running here; SNOUTDATA_NO_DESKTOP opts out)
@@ -177,6 +195,8 @@ Docs: https://docs.snoutdata.com/developers/cli
 Examples: https://github.com/snoutdata/snoutdata (a star helps other people find it)
 Source: https://github.com/snoutdata/snout-cli
 `;
+
+const SHARDS_ONLY = ['yes', 'token'] as const;
 
 async function run(args: ParsedArgs): Promise<number> {
 	const [group, action, ...rest] = args.command;
@@ -249,7 +269,19 @@ async function run(args: ParsedArgs): Promise<number> {
 		return found ? localStack(found) : null;
 	};
 
+	// `--yes` and `--token` mean something to `shards` alone. Anywhere else a yes would confirm
+	// nothing and a token on argv is the thing args.ts refuses, so they stay refused there.
+	for (const flag of SHARDS_ONLY) {
+		if (args.flags[flag] !== undefined && group !== 'shards') {
+			throw new UsageError(`--${flag} is only for snoutdata shards`);
+		}
+	}
+
 	switch (group) {
+		case 'shards':
+			// A Lepis cluster (L13): a standalone router with --admin, or a
+			// SnoutData Cloud project with --project, through the same client seam (shardsClient.ts).
+			return shards(args, { timeoutMs: timeoutMs() });
 		case 'login': {
 			if (flagBoolean(args, 'device')) {
 				// The pairing flow, asked for by name. The ladder offers it too, but as the

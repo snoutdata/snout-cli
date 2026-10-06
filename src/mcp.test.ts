@@ -1,6 +1,8 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { expiryDays, handle, takeMessages, PROTOCOL_VERSION, TOOLS, type McpOperations, type McpOptions } from './mcp.js';
+import { expiryDays, handle, takeMessages, PlanMemory, PROTOCOL_VERSION, TOOLS, type McpOperations, type McpOptions } from './mcp.js';
+import { CliFailure } from './failure.js';
+import type { Advice, Job, OpBody, Plan, ShardsClient } from './shardsClient.js';
 
 function operations(over: Partial<McpOperations> = {}): McpOperations {
 	return {
@@ -219,14 +221,20 @@ test('every tool the CLI advertises can actually be called', async () => {
 		add_domain: { ref: 'b7kq2m9xt4rvz', hostname: 'api.example.com' },
 		verify_domain: { ref: 'b7kq2m9xt4rvz', hostname: 'api.example.com' },
 		remove_domain: { ref: 'b7kq2m9xt4rvz', hostname: 'api.example.com' },
-		restore_to_point: { ref: 'b7kq2m9xt4rvz', at: '2026-09-20T10:00:00Z' }
+		restore_to_point: { ref: 'b7kq2m9xt4rvz', at: '2026-09-20T10:00:00Z' },
+		shards_plan: { operation: { op: 'verify' } },
+		shards_run: { operation: { op: 'verify' } },
+		shards_jobs: { id: 1 },
+		shards_watch_job: { id: 1 },
+		shards_cancel_job: { id: 1 },
+		shards_resume_job: { id: 1 }
 	};
 	for (const tool of TOOLS) {
 		const answer = await call(
 			tool.name,
 			args[tool.name] ?? { ref: 'b7kq2m9xt4rvz' },
-			operations(),
-			{ version: '0.1.0', allowDelete: true }
+			operations({ shards: () => fakeShards(['done']).client }),
+			{ version: '0.1.0', allowDelete: true, shardsPlans: new PlanMemory(), shardsPollMs: 1 }
 		);
 		assert.equal(isError(answer), false, `${tool.name} could not be called: ${text(answer)}`);
 	}
@@ -455,4 +463,263 @@ test('a local ref asked of a cloud tool is one sentence naming the tools that wo
 	assert.match(text(listed), /local-test/);
 	// And a cloud ref is untouched by the gate.
 	assert.ok(!isError(await call('usage', { ref: 'b7kq2m9xt4rvz' }, ops)));
+});
+
+// ---------------------------------------------------------------------------
+// Lepis (Phase 8): an agent reads, plans, gets advice, runs and watches, and no run
+// happens that was not planned first.
+// ---------------------------------------------------------------------------
+
+const SHARD_PLAN: Plan = {
+	op: 'range.split',
+	steps: [{ kind: 'catalog', args: { change: { split: { lo: '-3074457345618258603' } } } }, { kind: 'transfer', args: {} }],
+	moves: [{ source: 2, targets: [3], tables: ['app.t'], change: {}, estimated_rows: 66000, estimated_bytes: 19_000_000, estimated_copy_seconds: 1.4, expected_pause_ms: 65 }],
+	cutovers: 1,
+	estimated_rows: 66000,
+	estimated_bytes: 19_000_000,
+	estimated_copy_seconds: 1.4,
+	expected_pause_ms: 65,
+	max_write_pause_ms: 2000,
+	warnings: []
+};
+
+const SPLIT: OpBody = { op: 'range.split', keyspace: 'advk', range: '-3074457345618258603', at: '18454348402311335', to: 3 };
+
+function shardJob(state: Job['state']): Job {
+	return {
+		id: 9,
+		op: 'range.split',
+		args: {},
+		plan: SHARD_PLAN,
+		state,
+		error: state === 'failed' ? 'node 3: connection refused' : null,
+		runner: 'r',
+		created_at: 'x',
+		updated_at: 'x',
+		finished_at: null,
+		steps: [{ n: 0, kind: 'transfer', args: {}, state: state === 'done' ? 'done' : 'running', detail: { phase: 'copy' }, started_at: null, finished_at: null }]
+	};
+}
+
+function fakeShards(states: Job['state'][] = ['running', 'done']) {
+	const calls: string[] = [];
+	const sent: OpBody[] = [];
+	let look = 0;
+	const advice: Advice = {
+		summary: '1 recommendation.',
+		advice: [{ op: 'range.split', request: SPLIT, reason: 'node 2 holds most of advk', metric: 'size', needs: [], plan: SHARD_PLAN }],
+		facts: { sampled_ms: 0, nodes: [], ranges: [] },
+		settings: {},
+		assumptions: 'chosen'
+	};
+	const client: ShardsClient = {
+		target: 'http://127.0.0.1:7432',
+		status: async () => {
+			calls.push('status');
+			return { catalog: true, epoch: 3 };
+		},
+		ops: async () => ({ ops: [], settings: {} }),
+		plan: async (body) => {
+			calls.push('plan');
+			sent.push(body);
+			return SHARD_PLAN;
+		},
+		submit: async (body) => {
+			calls.push('submit');
+			sent.push(body);
+			return { job: 9, plan: SHARD_PLAN };
+		},
+		jobs: async () => {
+			calls.push('jobs');
+			return [];
+		},
+		job: async () => {
+			calls.push('job');
+			const state = states[Math.min(look, states.length - 1)]!;
+			look += 1;
+			return shardJob(state);
+		},
+		cancel: async (id) => {
+			calls.push('cancel');
+			return { job: id, state: 'cancelling' };
+		},
+		resume: async (id) => {
+			calls.push('resume');
+			return { job: id, state: 'running' };
+		},
+		settings: async (patch) => ({ settings: patch as Record<string, number> }),
+		advice: async (sampleMs) => {
+			calls.push(`advice ${sampleMs ?? '-'}`);
+			return advice;
+		}
+	};
+	return { client, calls, sent };
+}
+
+function shardOptions(): McpOptions {
+	return { version: '0.1.0', shardsPlans: new PlanMemory(), shardsPollMs: 1 };
+}
+
+test('the shards tools are listed, and say which only read', async () => {
+	const answer = await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, operations(), OPTIONS);
+	const tools = (answer!.result as { tools: { name: string; annotations: { readOnlyHint?: boolean; destructiveHint?: boolean } }[] }).tools;
+	const by = new Map(tools.map((t) => [t.name, t.annotations]));
+	for (const name of ['shards_status', 'shards_advice', 'shards_plan', 'shards_jobs', 'shards_watch_job']) {
+		assert.equal(by.get(name)?.readOnlyHint, true, name);
+	}
+	assert.deepEqual(by.get('shards_run'), { readOnlyHint: false, destructiveHint: true });
+	assert.equal(by.get('shards_cancel_job')?.readOnlyHint, false);
+	// The router's token is never a tool argument.
+	for (const tool of TOOLS.filter((t) => t.name.startsWith('shards_'))) {
+		const props = Object.keys((tool.inputSchema as { properties?: Record<string, unknown> }).properties ?? {});
+		assert.equal(props.some((p) => /token|admin/i.test(p)), false, tool.name);
+	}
+});
+
+test('with no router, a shards tool says what to set, as a result', async () => {
+	const missing = operations({
+		shards: () => {
+			throw new Error('The shards tools need a Lepis router: LEPIS_ADMIN_URL');
+		}
+	});
+	const answer = await call('shards_status', {}, missing);
+	assert.equal(isError(answer), true);
+	assert.match(text(answer), /LEPIS_ADMIN_URL/);
+	const none = await call('shards_status', {}, operations());
+	assert.equal(isError(none), true);
+	assert.match(text(none), /LEPIS_ADMIN_URL/);
+});
+
+test('shards_run without confirm returns the plan and runs nothing', async () => {
+	const { client, calls } = fakeShards();
+	const answer = await call('shards_run', { operation: SPLIT }, operations({ shards: () => client }), shardOptions());
+	assert.equal(isError(answer), false);
+	const out = JSON.parse(text(answer)) as { ran: boolean; plan: { cutovers: number; moves: { from: number }[]; steps: string[] }; next: string };
+	assert.equal(out.ran, false);
+	assert.equal(out.plan.cutovers, 1);
+	assert.deepEqual(out.plan.steps, ['catalog', 'transfer']);
+	assert.equal(out.plan.moves[0]!.from, 2);
+	assert.match(out.next, /confirm: true/);
+	assert.deepEqual(calls, ['plan']);
+});
+
+test('confirm runs only what was planned here, once, however its keys are ordered', async () => {
+	const { client, calls, sent } = fakeShards();
+	const ops = operations({ shards: () => client });
+	const options = shardOptions();
+	// Confirmed without a plan first: planned instead, NOT run, and said as a refusal.
+	const blind = await call('shards_run', { operation: SPLIT, confirm: true }, ops, options);
+	assert.equal(isError(blind), true);
+	assert.match(text(blind), /NOT RUN/);
+	assert.deepEqual(calls, ['plan']);
+	// Now it was planned: the same operation, keys in another order, runs.
+	const reordered = { to: 3, at: SPLIT.at, range: SPLIT.range, keyspace: 'advk', op: 'range.split' };
+	const ran = await call('shards_run', { operation: reordered, confirm: true }, ops, options);
+	assert.equal(isError(ran), false, text(ran));
+	const out = JSON.parse(text(ran)) as { ran: boolean; job: number; next: string };
+	assert.deepEqual([out.ran, out.job], [true, 9]);
+	assert.match(out.next, /shards_watch_job/);
+	assert.deepEqual(calls, ['plan', 'submit']);
+	assert.deepEqual(sent[1], reordered);
+	// A run forgets its plan: a second confirm plans again rather than running twice.
+	const again = await call('shards_run', { operation: SPLIT, confirm: true }, ops, options);
+	assert.equal(isError(again), true);
+	assert.deepEqual(calls, ['plan', 'submit', 'plan']);
+});
+
+test('a plan goes stale', async () => {
+	let now = 0;
+	const { client, calls } = fakeShards();
+	const options: McpOptions = { version: '0.1.0', shardsPlans: new PlanMemory(1000, () => now) };
+	const ops = operations({ shards: () => client });
+	await call('shards_plan', { operation: SPLIT }, ops, options);
+	now = 5000;
+	const late = await call('shards_run', { operation: SPLIT, confirm: true }, ops, options);
+	assert.equal(isError(late), true);
+	assert.deepEqual(calls, ['plan', 'plan']);
+});
+
+test('advice comes planned, so its operation can be confirmed as it is', async () => {
+	const { client, calls } = fakeShards();
+	const ops = operations({ shards: () => client });
+	const options = shardOptions();
+	const answer = await call('shards_advice', { sampleMs: 0 }, ops, options);
+	const out = JSON.parse(text(answer)) as { advice: { operation: OpBody; plan: unknown; reason: string }[]; next: string };
+	assert.deepEqual(out.advice[0]!.operation, SPLIT);
+	assert.ok(out.advice[0]!.plan);
+	assert.match(out.next, /Nothing has run/);
+	const ran = await call('shards_run', { operation: out.advice[0]!.operation, confirm: true }, ops, options);
+	assert.equal(isError(ran), false, text(ran));
+	assert.deepEqual(calls, ['advice 0', 'submit']);
+});
+
+test('a 64-bit bound sent as a JSON number is refused before anything is sent', async () => {
+	const { client, calls } = fakeShards();
+	const answer = await call('shards_plan', { operation: { op: 'range.move', keyspace: 'k', range: -3074457345618258603, to: 2 } }, operations({ shards: () => client }), shardOptions());
+	assert.equal(isError(answer), true);
+	assert.match(text(answer), /as a string/);
+	const bad = await call('shards_plan', { operation: { op: 'range.teleport' } }, operations({ shards: () => client }), shardOptions());
+	assert.match(text(bad), /one of node\.add/);
+	assert.deepEqual(calls, []);
+});
+
+test('watching a job waits for its end; a failed one is an error naming the resume', async () => {
+	const done = fakeShards(['pending', 'running', 'done']);
+	const answer = await call('shards_watch_job', { id: 9 }, operations({ shards: () => done.client }), shardOptions());
+	assert.equal(isError(answer), false);
+	const out = JSON.parse(text(answer)) as { state: string; finished: boolean; steps: { n: number; phase: string }[] };
+	assert.deepEqual([out.state, out.finished, out.steps[0]!.n], ['done', true, 1]);
+	assert.deepEqual(done.calls, ['job', 'job', 'job']);
+	const failed = fakeShards(['failed']);
+	const f = await call('shards_watch_job', { id: '9' }, operations({ shards: () => failed.client }), shardOptions());
+	assert.equal(isError(f), true);
+	assert.match(text(f), /connection refused/);
+	assert.match(text(f), /shards_resume_job/);
+	// Out of time: the job carries on, and that is not an error.
+	const slow = fakeShards(['running']);
+	const s = await call('shards_watch_job', { id: 9, timeoutSeconds: 0.01 }, operations({ shards: () => slow.client }), shardOptions());
+	assert.equal(isError(s), false);
+	assert.match(text(s), /call shards_watch_job again/);
+});
+
+test('a router refusal comes back with its kind', async () => {
+	const { client } = fakeShards();
+	client.plan = async () => {
+		throw new CliFailure('conflict', 'keyspace k has no range starting at 12', { status: 409, kind: 'no_such_range' });
+	};
+	const answer = await call('shards_plan', { operation: { op: 'range.move', keyspace: 'k', range: '12', to: 2 } }, operations({ shards: () => client }), shardOptions());
+	assert.equal(isError(answer), true);
+	assert.deepEqual(JSON.parse(text(answer)), { error: 'keyspace k has no range starting at 12', kind: 'no_such_range' });
+});
+
+test('project reaches a Cloud cluster, and a plan for one project never confirms a run on another', async () => {
+	const { client, calls } = fakeShards();
+	const asked: (string | undefined)[] = [];
+	const ops = operations({
+		shards: (project) => {
+			asked.push(project);
+			return client;
+		}
+	});
+	const options = shardOptions();
+	await call('shards_plan', { project: 'abcdefghjkmnp', operation: SPLIT }, ops, options);
+	assert.deepEqual(asked, ['abcdefghjkmnp']);
+	// Planned for one project; confirmed for another: planned again, not run.
+	const elsewhere = await call('shards_run', { project: 'zzzzzzzzzzzzz', operation: SPLIT, confirm: true }, ops, options);
+	assert.match(text(elsewhere), /NOT RUN/);
+	const here = await call('shards_run', { project: 'abcdefghjkmnp', operation: SPLIT, confirm: true }, ops, options);
+	assert.equal(isError(here), false, text(here));
+	assert.deepEqual(calls, ['plan', 'plan', 'submit']);
+});
+
+test('a Cloud pod made by shards_run is done, with no job to follow', async () => {
+	const { client } = fakeShards();
+	client.submit = async () => ({ done: 'New node pod qrstvwxyzabcd.', answer: { created: ['qrstvwxyzabcd'] } });
+	const ops = operations({ shards: () => client });
+	const options = shardOptions();
+	const add: OpBody = { op: 'node.add' };
+	await call('shards_plan', { project: 'abcdefghjkmnp', operation: add }, ops, options);
+	const ran = await call('shards_run', { project: 'abcdefghjkmnp', operation: add, confirm: true }, ops, options);
+	const out = JSON.parse(text(ran)) as { ran: boolean; done: string };
+	assert.deepEqual([out.ran, out.done], [true, 'New node pod qrstvwxyzabcd.']);
 });
