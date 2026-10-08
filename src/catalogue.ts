@@ -22,7 +22,7 @@ export const COMMANDS = [
 	{ name: 'upgrade', summary: 'Install the newest CLI the way this one was installed (binary or npm), checksum verified', flags: ['--check'] },
 	{ name: 'tokens list', summary: 'Long-lived access tokens on this account', flags: [] },
 	{ name: 'tokens create', summary: 'Mint an sdt_ token for CI or an agent', flags: ['--name', '--expires', '--project'] },
-	{ name: 'tokens revoke', summary: 'Revoke one by id or prefix', flags: [] },
+	{ name: 'tokens revoke', args: '<id|sdt_prefix>', summary: 'Revoke one by id or prefix', flags: [] },
 	{ name: 'projects list', summary: 'Every project on this account', flags: [] },
 	{ name: 'projects create', summary: 'Make a hosted database, and print its ref', flags: ['--name', '--region', '--team', '--no-wait', '--timeout', '--show-url'] },
 	{ name: 'projects pause', summary: 'Stop a project, and wait until it is paused', flags: ['--ref', '--no-wait', '--timeout'] },
@@ -30,27 +30,27 @@ export const COMMANDS = [
 	{ name: 'projects delete', summary: 'Delete a project, and wait until it is gone', flags: ['--ref', '--no-wait', '--timeout'] },
 	{ name: 'projects show', summary: 'One project: state, products (Realtime included), functions, secrets, domains', flags: ['--ref'] },
 	{ name: 'products', summary: 'Auth, storage, the data API and push: on or off. Realtime is always on, and listed', flags: ['--ref'] },
-	{ name: 'products enable', summary: 'Turn auth, storage, data-api or push on', flags: ['--ref'] },
-	{ name: 'products disable', summary: 'Turn auth, storage, data-api or push off', flags: ['--ref'] },
+	{ name: 'products enable', args: 'auth|storage|data-api|push', summary: 'Turn auth, storage, data-api or push on', flags: ['--ref'] },
+	{ name: 'products disable', args: 'auth|storage|data-api|push', summary: 'Turn auth, storage, data-api or push off', flags: ['--ref'] },
 	{ name: 'push credentials', summary: 'Push keys: what is set for APNs, FCM and Web Push (never the keys)', flags: ['--ref'] },
-	{ name: 'push credentials set', summary: 'Set the APNs key (a .p8) or the FCM service account, checked before it is stored', flags: ['--ref', '--p8', '--key-id', '--team-id', '--topic', '--environment', '--file'] },
-	{ name: 'push credentials remove', summary: 'Remove the APNs or FCM credentials', flags: ['--ref'] },
+	{ name: 'push credentials set', args: 'apns|fcm', summary: 'Set the APNs key (a .p8) or the FCM service account, checked before it is stored', flags: ['--ref', '--p8', '--key-id', '--team-id', '--topic', '--environment', '--file'] },
+	{ name: 'push credentials remove', args: 'apns|fcm', summary: 'Remove the APNs or FCM credentials', flags: ['--ref'] },
 	{ name: 'auth', summary: 'Auth settings: Google sign-in and redirect addresses', flags: ['--ref'] },
 	{ name: 'auth google', summary: 'Sign in with Google, with your own client (secret on stdin)', flags: ['--ref', '--client-id', '--stdin'] },
-	{ name: 'auth anonymous', summary: 'Guest sign-in on or off: signInAnonymously() gives a browser a session with no email or password', flags: ['--ref'] },
+	{ name: 'auth anonymous', args: 'on|off', summary: 'Guest sign-in on or off: signInAnonymously() gives a browser a session with no email or password', flags: ['--ref'] },
 	{ name: 'auth redirects', summary: 'The site URL and the addresses a sign-in may return to', flags: ['--ref', '--site-url', '--allow'] },
 	{ name: 'auth templates', summary: 'The five auth emails, ours or your own', flags: ['--ref'] },
-	{ name: 'auth template', summary: 'Use your own subject and HTML for one, or reset it', flags: ['--ref', '--file', '--subject'] },
+	{ name: 'auth template', args: 'KIND', summary: 'Use your own subject and HTML for one, or reset it', flags: ['--ref', '--file', '--subject'] },
 	{ name: 'realtime inspect', summary: 'The channels open now: each client, its presence, when it was last heard, and the last minute of messages', flags: ['--channel', '--watch', '--ref'] },
 	{ name: 'realtime logs', summary: 'The connection log: connects, joins, leaves and disconnects, with the reason each ended', flags: ['--since', '--channel', '--ref'] },
 	{ name: 'domains', summary: 'Your own domains in front of the project API', flags: ['--ref'] },
-	{ name: 'domains add', summary: 'Add one, and print the DNS records to publish', flags: ['--ref'] },
-	{ name: 'domains verify', summary: 'Check its records and verify it', flags: ['--ref'] },
-	{ name: 'domains remove', summary: 'Stop serving it', flags: ['--ref'] },
-	{ name: 'functions deploy', summary: 'Put a folder of TypeScript on the edge', flags: ['--ref', '--dir', '--entrypoint', '--no-verify-jwt'] },
+	{ name: 'domains add', args: '<hostname>', summary: 'Add one, and print the DNS records to publish', flags: ['--ref'] },
+	{ name: 'domains verify', args: '<hostname>', summary: 'Check its records and verify it', flags: ['--ref'] },
+	{ name: 'domains remove', args: '<hostname>', summary: 'Stop serving it', flags: ['--ref'] },
+	{ name: 'functions deploy', args: '<name>', summary: 'Put a folder of TypeScript on the edge', flags: ['--ref', '--dir', '--entrypoint', '--no-verify-jwt'] },
 	{ name: 'functions list', summary: 'What this project has deployed', flags: ['--ref'] },
-	{ name: 'functions size', summary: 'Its memory and workers, within the plan', flags: ['--ref', '--memory', '--concurrency', '--reset'] },
-	{ name: 'functions delete', summary: 'Remove one', flags: ['--ref'] },
+	{ name: 'functions size', args: '<name>', summary: 'Its memory and workers, within the plan', flags: ['--ref', '--memory', '--concurrency', '--reset'] },
+	{ name: 'functions delete', args: '<name>', summary: 'Remove one', flags: ['--ref'] },
 	{ name: 'secrets set', summary: 'Set the environment functions run with', flags: ['--ref', '--stdin'] },
 	{ name: 'secrets list', summary: 'The names, never the values', flags: ['--ref'] },
 	{ name: 'secrets unset', summary: 'Remove one', flags: ['--ref'] },
@@ -211,4 +211,20 @@ const FLAG_HELP: Record<string, string> = {
 
 export function flagHelp(command: string, flag: string): string {
 	return FLAG_HELP[`${command} ${flag}`] ?? FLAG_HELP[flag] ?? '';
+}
+
+/**
+ * The commands `<group> [action] --help` is about. With an action that names a command (or a
+ * group of them), only those: `auth anonymous --help` printed all of `auth` and never showed
+ * that `anonymous` takes on or off (2026-10-06). An action that names nothing, such as a
+ * hostname, falls back to the whole group.
+ */
+export function commandsFor(group: string, action?: string): (typeof COMMANDS)[number][] {
+	const inGroup = COMMANDS.filter((one) => one.name === group || one.name.startsWith(`${group} `));
+	if (!action) {
+		return inGroup;
+	}
+	const named = `${group} ${action}`;
+	const narrowed = inGroup.filter((one) => one.name === named || one.name.startsWith(`${named} `));
+	return narrowed.length > 0 ? narrowed : inGroup;
 }

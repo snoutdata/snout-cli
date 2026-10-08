@@ -47,7 +47,7 @@ import { shards } from './commands/shards.js';
 
 import { upgrade } from './commands/upgrade.js';
 import { expecting, sameEmail } from './commands/login.js';
-import { flagHelp } from './catalogue.js';
+import { commandsFor, flagHelp } from './catalogue.js';
 import { readAuth } from './config.js';
 // Injected by build.mjs from package.json, because a hand-maintained copy of the version
 // drifts and did: 0.1.1 was published reporting 0.1.0 in --version, --help and the MCP
@@ -212,12 +212,13 @@ async function run(args: ParsedArgs): Promise<number> {
 	// different question. With a group, answer about that group: the same COMMANDS data,
 	// filtered, so there is no second copy of the surface to go stale.
 	if (flagBoolean(args, 'help') && group && group !== 'help') {
-		const matching = COMMANDS.filter((one) => one.name === group || one.name.startsWith(`${group} `));
+		const matching = commandsFor(group, action);
 		if (matching.length > 0) {
 			emit({ commands: matching.map((one) => ({ ...one, flagHelp: Object.fromEntries(one.flags.map((flag) => [flag, flagHelp(one.name, flag)])) })) }, () => {
 				for (const one of matching) {
+					const words = 'args' in one && one.args ? ` ${one.args}` : '';
 					const flags = one.flags.length > 0 ? ` ${one.flags.join(' ')}` : '';
-					process.stdout.write(`  snoutdata ${one.name}${flags}\n      ${one.summary}\n`);
+					process.stdout.write(`  snoutdata ${one.name}${words}${flags}\n      ${one.summary}\n`);
 					// One line per flag. A list of bare names told nobody where `init --env` writes,
 					// or that it writes a password into a file.
 					const width = Math.max(0, ...one.flags.map((flag) => flag.length));
