@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { COMMANDS, flagHelp } from './catalogue.js';
+import { COMMANDS, commandsFor, flagHelp } from './catalogue.js';
 import { parseArgs } from './args.js';
 
 /**
@@ -51,4 +51,22 @@ describe('every documented flag says what it does', () => {
 			});
 		}
 	}
+});
+
+describe('<group> <action> --help is about that command', () => {
+	test('an action that names a command narrows to it, with its arguments', () => {
+		const found = commandsFor('auth', 'anonymous');
+		assert.deepEqual(found.map((one) => one.name), ['auth anonymous']);
+		assert.equal('args' in found[0]! ? found[0].args : undefined, 'on|off');
+	});
+
+	test('an action that names a group keeps the group', () => {
+		assert.deepEqual(commandsFor('push', 'credentials').map((one) => one.name), ['push credentials', 'push credentials set', 'push credentials remove']);
+	});
+
+	test('no action, or one that names nothing, is the whole group', () => {
+		const all = commandsFor('domains').map((one) => one.name);
+		assert.ok(all.length > 1);
+		assert.deepEqual(commandsFor('domains', 'example.com').map((one) => one.name), all);
+	});
 });
