@@ -75,7 +75,8 @@ const DESTRUCTIVE = new Set([
 	'tenant.pin',
 	'rebalance',
 	'scale',
-	'cleanup'
+	'cleanup',
+	'dissolve'
 ]);
 
 /** Per-operation overrides of the cluster's settings, as flags: `--max-write-pause-ms 500`. */
@@ -86,7 +87,7 @@ const SETTING_FLAGS: Record<SettingName, string> = {
 	copy_mb_per_s: 'copy-mb-per-s'
 };
 
-const OP_HELP = 'nodes add|drain|remove, keyspace create, table distribute|reference|global, range split|merge|move, tenant pin, rebalance, scale, verify, cleanup';
+const OP_HELP = 'nodes add|drain|remove, keyspace create|drop, table distribute|reference|global, range split|merge|move, tenant pin, rebalance, scale, verify, cleanup, dissolve';
 
 /**
  * The operation `words` name (everything after `shards`), as the admin API's body.
@@ -167,6 +168,15 @@ export function parseOp(words: readonly string[], args: ParsedArgs, cloud = fals
 				...(flag('seed') !== undefined ? { seed: seed(flag('seed')!) } : {}),
 				...(flag('nodes') ? { nodes: list(flag('nodes')!) } : {})
 			};
+			break;
+		case 'keyspace drop':
+			body = { op: 'keyspace.drop', name: need(rest[0] ?? flag('name'), 'keyspace drop needs a name: cluster keyspace drop <name> (a keyspace no table is distributed by)') };
+			break;
+		case 'dissolve':
+			if (cloud) {
+				throw new UsageError('in SnoutData Cloud, turn the cluster off with cluster disable --project <ref>: it dissolves the cluster and then stops the router');
+			}
+			body = { op: 'dissolve' };
 			break;
 		case 'table distribute':
 			body = {
@@ -392,6 +402,35 @@ export async function shards(args: ParsedArgs, options: ShardsOptions = {}): Pro
 				}
 			}
 			const answer = (await shards.enable(false)) as Record<string, unknown>;
+			emit(answer, () => say(describeCloudAnswer(answer)));
+			return 0;
+		}
+		case 'disable': {
+			// The undo of `enable`: Lepis dissolves the cluster (the home must be its only node),
+			// then the router leaves the pod, a restart of the database.
+			if (!cloud) {
+				throw new UsageError('cluster disable is for a SnoutData Cloud project: cluster disable --project <ref>. A standalone cluster is taken apart with cluster dissolve, and then by stopping the router');
+			}
+			const shards = client();
+			if (!(shards instanceof CloudShardsClient)) {
+				throw new UsageError('cluster disable needs --project <ref>');
+			}
+			if (flagBoolean(args, 'plan')) {
+				const plan = (await shards.disable(true)) as Plan;
+				emit(plan, () => printPlan(plan, process.stdout));
+				return 0;
+			}
+			if (!flagBoolean(args, 'yes')) {
+				if (!options.confirm && !canAsk()) {
+					throw new UsageError('turning the cluster off restarts the database once, and nothing was asked: pass --yes, or --plan to see what it does');
+				}
+				printPlan((await shards.disable(true)) as Plan, process.stderr);
+				const ask = options.confirm ?? confirm;
+				if (!(await ask(`Turn the cluster of ${shards.target} off?`))) {
+					throw new CliFailure('failed', 'Not turned off. Nothing was changed.');
+				}
+			}
+			const answer = (await shards.disable(false)) as Record<string, unknown>;
 			emit(answer, () => say(describeCloudAnswer(answer)));
 			return 0;
 		}

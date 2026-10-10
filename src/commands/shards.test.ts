@@ -463,6 +463,19 @@ describe('shards --project: a SnoutData Cloud project, through cloud-project-sha
 		await assert.rejects(run(['enable'], { client }), UsageError);
 	});
 
+	test('disable is the undo of enable: Cloud only, asks first, and keyspace drop and dissolve are plain operations', async () => {
+		const { client, sent } = cloud({ disable: { sharded: false, changed: true, job: 4 } });
+		await assert.rejects(run(['disable', '--project', 'abcdefghjkmnp'], { client }), UsageError);
+		assert.deepEqual(sent, []);
+		assert.equal(await run(['disable', '--project', 'abcdefghjkmnp', '--yes'], { client }), 0);
+		assert.deepEqual(sent, [{ ref: 'abcdefghjkmnp', action: 'disable' }]);
+		await assert.rejects(run(['disable'], { client }), UsageError);
+		assert.deepEqual(op('keyspace', 'drop', 'accounts'), { body: { op: 'keyspace.drop', name: 'accounts' }, destructive: false });
+		assert.throws(() => op('keyspace', 'drop'), UsageError);
+		assert.deepEqual(op('dissolve'), { body: { op: 'dissolve' }, destructive: true });
+		assert.throws(() => cloudOp('dissolve'), /cluster disable/);
+	});
+
 	test('status names the step each pod is waiting on, as the command that takes it', () => {
 		const view = {
 			ref: 'abcdefghjkmnp', sharded: true, projectsUsed: 2, maxProjects: 5, tier: 'pro', desiredNodes: 2, maxWritePauseMs: 2000, routerError: null,

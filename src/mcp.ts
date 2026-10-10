@@ -187,7 +187,9 @@ export const SHARD_OPS = [
 	'scale',
 	'verify',
 	'cleanup',
-	'node.attach'
+	'node.attach',
+	'keyspace.drop',
+	'dissolve'
 ] as const;
 
 /** The version of the MCP spec this speaks. Echoed back in the handshake. */

@@ -483,7 +483,9 @@ const CLOUD_ACTIONS: Record<string, string> = {
 	rebalance: 'rebalance',
 	scale: 'scale',
 	verify: 'verify',
-	cleanup: 'cleanup'
+	cleanup: 'cleanup',
+	'keyspace.drop': 'drop-keyspace',
+	dissolve: 'disable'
 };
 
 /** How the Snout Function is called; `api.call` unless a test hands in its own. */
@@ -564,6 +566,11 @@ export class CloudShardsClient implements ShardsClient {
 		return this.#send({ action: 'enable', ...(planOnly ? { plan: true } : {}) });
 	}
 
+	/** Turns the cluster off (171): Lepis dissolves it, then the router leaves the pod. */
+	disable(planOnly: boolean): Promise<Plan | { sharded: boolean; changed: boolean; job?: number; next?: string; note?: string }> {
+		return this.#send({ action: 'disable', ...(planOnly ? { plan: true } : {}) });
+	}
+
 	#action(body: OpBody): string {
 		const action = CLOUD_ACTIONS[body.op];
 		if (!action) {
@@ -604,6 +611,12 @@ export function describeCloudAnswer(answer: Record<string, unknown>): string {
 	}
 	if (answer.sharded === true) {
 		return answer.changed === false ? 'This project is already a cluster.' : String(answer.note ?? 'This project is a cluster now.');
+	}
+	if (answer.sharded === false) {
+		return answer.changed === false ? 'This project is not a cluster.' : String(answer.note ?? 'This project is not a cluster any more.');
+	}
+	if (typeof answer.next === 'string') {
+		return answer.next;
 	}
 	return 'Done.';
 }
