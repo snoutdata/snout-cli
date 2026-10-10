@@ -18,7 +18,7 @@ setQuiet(true);
 setInteractive({ canAsk: false, reason: 'not-a-tty' });
 
 function op(...argv: string[]) {
-	const args = parseArgs(['shards', ...argv]);
+	const args = parseArgs(['cluster', ...argv]);
 	return parseOp(args.command.slice(1), args);
 }
 
@@ -241,7 +241,7 @@ async function run(argv: string[], options: Parameters<typeof shards>[1] = {}): 
 	const write = process.stdout.write;
 	process.stdout.write = (() => true) as typeof process.stdout.write;
 	try {
-		return await shards(parseArgs(['shards', ...argv]), { pollMs: 1, ...options });
+		return await shards(parseArgs(['cluster', ...argv]), { pollMs: 1, ...options });
 	} finally {
 		process.stdout.write = write;
 	}
@@ -374,11 +374,11 @@ describe('advice, printed', () => {
 	test('each recommendation carries the command that runs it, bounds exact', () => {
 		assert.equal(
 			commandFor({ op: 'range.split', keyspace: 'advk', range: '-3074457345618258603', at: '18454348402311335', to: 3 }),
-			'snoutdata shards range split advk:-3074457345618258603 --at 18454348402311335 --to 3'
+			'snoutdata cluster range split advk:-3074457345618258603 --at 18454348402311335 --to 3'
 		);
-		assert.equal(commandFor({ op: 'range.move', keyspace: 'k', range: '1', to: 2 }), 'snoutdata shards range move k:1 --to 2');
-		assert.equal(commandFor({ op: 'tenant.pin', keyspace: 'k', value: "o'brien co", node: 2 }), "snoutdata shards tenant pin k --value 'o'\\''brien co' --node 2");
-		assert.match(commandFor({ op: 'node.add', name: 'n4', host: null })!, /nodes add n4 --host <its address>, then snoutdata shards rebalance/);
+		assert.equal(commandFor({ op: 'range.move', keyspace: 'k', range: '1', to: 2 }), 'snoutdata cluster range move k:1 --to 2');
+		assert.equal(commandFor({ op: 'tenant.pin', keyspace: 'k', value: "o'brien co", node: 2 }), "snoutdata cluster tenant pin k --value 'o'\\''brien co' --node 2");
+		assert.match(commandFor({ op: 'node.add', name: 'n4', host: null })!, /nodes add n4 --host <its address>, then snoutdata cluster rebalance/);
 		assert.equal(commandFor({ op: 'verify' }), null);
 		// What the command prints parses back to the request it came from.
 		const words = commandFor({ op: 'range.split', keyspace: 'advk', range: '-3074457345618258603', at: '-1', to: 3 })!.split(' ').slice(2);
@@ -390,7 +390,7 @@ describe('advice, printed', () => {
 		printAdvice(ADVICE, { write: (t: string) => (text += t) });
 		assert.match(text, /1\. range\.split.*\(size\)/);
 		assert.match(text, /node 2 holds 38\.5 MB/);
-		assert.match(text, /run: snoutdata shards range split advk:-3074457345618258603/);
+		assert.match(text, /run: snoutdata cluster range split advk:-3074457345618258603/);
 		assert.match(text, /plan: 1 cutover, ~10 rows/);
 		assert.match(text, /needs: host, so it has no plan yet/);
 	});
@@ -417,7 +417,7 @@ describe('shards --project: a SnoutData Cloud project, through cloud-project-sha
 	}
 
 	function cloudOp(...argv: string[]) {
-		const args = parseArgs(['shards', ...argv]);
+		const args = parseArgs(['cluster', ...argv]);
 		return parseOp(args.command.slice(1), args, true);
 	}
 
@@ -468,7 +468,7 @@ describe('shards --project: a SnoutData Cloud project, through cloud-project-sha
 			ref: 'abcdefghjkmnp', sharded: true, projectsUsed: 2, maxProjects: 5, tier: 'pro', desiredNodes: 2, maxWritePauseMs: 2000, routerError: null,
 			pods: [{ ref: 'qrstvwxyzabcd', ordinal: 2, state: 'ready', desiredState: 'running', hasOwnBackup: false, standbyOf: 'abcdefghjkmnp', node: null, next: 'attach' as const }]
 		};
-		assert.equal(podStep(view, view.pods[0]!), 'ready: snoutdata shards nodes attach qrstvwxyzabcd --project abcdefghjkmnp');
+		assert.equal(podStep(view, view.pods[0]!), 'ready: snoutdata cluster nodes attach qrstvwxyzabcd --project abcdefghjkmnp');
 	});
 
 	test('each node uses a project slot: offered while one is spare, said beside the count', () => {

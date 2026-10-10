@@ -1,5 +1,5 @@
 /**
- * The one seam `snoutdata shards` talks through: a Lepis cluster's operations, whoever serves
+ * The one seam `snoutdata cluster` talks through: a Lepis cluster's operations, whoever serves
  * them (one management API, whatever the surface).
  *
  * Two implementations. `AdminClient`: a standalone router's admin API, reached with `--admin
@@ -264,7 +264,7 @@ export interface ShardsTarget {
 export function shardsClient(target: ShardsTarget, env: NodeJS.ProcessEnv = process.env): ShardsClient {
 	if (target.project !== undefined) {
 		if (target.admin !== undefined) {
-			throw new CliFailure('usage', 'shards takes --project (a SnoutData Cloud project) or --admin (a standalone router), not both');
+			throw new CliFailure('usage', 'cluster takes --project (a SnoutData Cloud project) or --admin (a standalone router), not both');
 		}
 		return new CloudShardsClient(cloudRef(target.project));
 	}
@@ -272,7 +272,7 @@ export function shardsClient(target: ShardsTarget, env: NodeJS.ProcessEnv = proc
 	if (!admin) {
 		throw new CliFailure(
 			'usage',
-			'shards needs a cluster: --project <ref> for a SnoutData Cloud project, or --admin <url> (or LEPIS_ADMIN_URL) for the admin API of a standalone Lepis router (LEPIS_ADMIN_ADDR)'
+			'cluster needs a project: --project <ref> for a SnoutData Cloud project, or --admin <url> (or LEPIS_ADMIN_URL) for the admin API of a standalone Lepis router (LEPIS_ADMIN_ADDR)'
 		);
 	}
 	const token = target.token ?? nonEmpty(env.LEPIS_ADMIN_TOKEN);
@@ -572,7 +572,7 @@ export class CloudShardsClient implements ShardsClient {
 		const fields = body as Record<string, unknown>;
 		// In the Cloud a node is a pod the control plane makes; an address is never the caller's.
 		if (body.op === 'node.add' && (fields.host !== undefined || fields.name !== undefined)) {
-			throw new CliFailure('usage', 'in SnoutData Cloud a node is a pod the project makes: nodes add takes no name or --host. Attach it once it is ready: shards nodes attach <ref>');
+			throw new CliFailure('usage', 'in SnoutData Cloud a node is a pod the project makes: nodes add takes no name or --host. Attach it once it is ready: cluster nodes attach <ref>');
 		}
 		if (body.op === 'scale' && (fields.add !== undefined || fields.remove !== undefined)) {
 			throw new CliFailure('usage', 'in SnoutData Cloud, scale takes --nodes N: how many nodes the project should have, the home included');
@@ -594,7 +594,7 @@ export function describeCloudAnswer(answer: Record<string, unknown>): string {
 	if (Array.isArray(answer.created)) {
 		const created = answer.created.map(String);
 		const stopped = typeof answer.stopped === 'string' ? ` Stopped there: ${answer.stopped}` : '';
-		return `New node pod${created.length === 1 ? '' : 's'} ${created.join(', ')}, restored from the home node's backup. Attach each once it is ready: snoutdata shards nodes attach <ref>.${stopped}`;
+		return `New node pod${created.length === 1 ? '' : 's'} ${created.join(', ')}, restored from the home node's backup. Attach each once it is ready: snoutdata cluster nodes attach <ref>.${stopped}`;
 	}
 	if (answer.deleted === true) {
 		return `The pod of ${String(answer.pod)} is being deleted. It owned nothing in the cluster.`;
@@ -603,7 +603,7 @@ export function describeCloudAnswer(answer: Record<string, unknown>): string {
 		return `The project already has ${String(answer.nodes)} nodes. Nothing changed.`;
 	}
 	if (answer.sharded === true) {
-		return answer.changed === false ? 'Sharding is already on.' : String(answer.note ?? 'Sharding is on.');
+		return answer.changed === false ? 'This project is already a cluster.' : String(answer.note ?? 'This project is a cluster now.');
 	}
 	return 'Done.';
 }

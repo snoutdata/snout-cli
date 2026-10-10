@@ -1,5 +1,5 @@
 /**
- * `snoutdata shards …` — a Lepis cluster from a terminal or an agent (L13).
+ * `snoutdata cluster …` — a Lepis cluster from a terminal or an agent (L13).
  *
  * Every operation exists once, in the router's admin API, and this file only carries it: it
  * turns words into an operation body, shows the router's own plan, asks before anything that
@@ -109,15 +109,15 @@ export function parseOp(words: readonly string[], args: ParsedArgs, cloud = fals
 	// ready one is attached by its ref, and scale is a node count. Everything else is the same.
 	if (cloud && (named === 'nodes add' || named === 'node add')) {
 		if (rest.length > 0 || flag('host') !== undefined) {
-			throw new UsageError('in SnoutData Cloud a node is a pod the project makes: shards nodes add --project <ref>, with no name or --host. Attach it once it is ready: shards nodes attach <node-ref>');
+			throw new UsageError('in SnoutData Cloud a node is a pod the project makes: cluster nodes add --project <ref>, with no name or --host. Attach it once it is ready: cluster nodes attach <node-ref>');
 		}
 		return { body: { op: 'node.add' }, destructive: false };
 	}
 	if (named === 'nodes attach' || named === 'node attach') {
 		if (!cloud) {
-			throw new UsageError('nodes attach is for a SnoutData Cloud project (--project): a standalone node joins with shards nodes add <name> --host H');
+			throw new UsageError('nodes attach is for a SnoutData Cloud project (--project): a standalone node joins with cluster nodes add <name> --host H');
 		}
-		return { body: { op: 'node.attach', name: need(rest[0] ?? flag('node'), 'nodes attach needs the node pod\'s ref, as shards status lists it') }, destructive: false };
+		return { body: { op: 'node.attach', name: need(rest[0] ?? flag('node'), 'nodes attach needs the node pod\'s ref, as cluster status lists it') }, destructive: false };
 	}
 	if (cloud && named === 'scale') {
 		if (flag('add') !== undefined || flag('remove') !== undefined) {
@@ -138,7 +138,7 @@ export function parseOp(words: readonly string[], args: ParsedArgs, cloud = fals
 		case 'node add':
 			body = {
 				op: 'node.add',
-				name: need(rest[0] ?? flag('name'), 'nodes add needs a name: shards nodes add <name> --host H [--port 5432] [--dbname D] [--sslmode M]'),
+				name: need(rest[0] ?? flag('name'), 'nodes add needs a name: cluster nodes add <name> --host H [--port 5432] [--dbname D] [--sslmode M]'),
 				host: need(flag('host'), 'nodes add needs --host, the address the router reaches the node at'),
 				...optionalInteger(args, 'port', 'port'),
 				...optionalString(args, 'dbname', 'dbname'),
@@ -150,19 +150,19 @@ export function parseOp(words: readonly string[], args: ParsedArgs, cloud = fals
 		case 'node drain':
 			body = {
 				op: 'node.drain',
-				node: need(rest[0] ?? flag('node'), 'nodes drain needs a node: shards nodes drain <id|name> [--to a,b]'),
+				node: need(rest[0] ?? flag('node'), 'nodes drain needs a node: cluster nodes drain <id|name> [--to a,b]'),
 				...(flag('to') ? { to: list(flag('to')!) } : {})
 			};
 			break;
 		case 'nodes remove':
 		case 'node remove':
-			body = { op: 'node.remove', node: need(rest[0] ?? flag('node'), 'nodes remove needs a node: shards nodes remove <id|name>') };
+			body = { op: 'node.remove', node: need(rest[0] ?? flag('node'), 'nodes remove needs a node: cluster nodes remove <id|name>') };
 			break;
 		case 'keyspace create':
 			body = {
 				op: 'keyspace.create',
-				name: need(rest[0] ?? flag('name'), 'keyspace create needs a name: shards keyspace create <name> --key-type bigint [--ranges N] [--nodes a,b]'),
-				key_type: need(flag('key-type'), 'keyspace create needs --key-type, the shard key\'s type (bigint, int, text, uuid, ...)'),
+				name: need(rest[0] ?? flag('name'), 'keyspace create needs a name: cluster keyspace create <name> --key-type bigint [--ranges N] [--nodes a,b]'),
+				key_type: need(flag('key-type'), 'keyspace create needs --key-type, the distribution key\'s type (bigint, int, text, uuid, ...)'),
 				...optionalInteger(args, 'ranges', 'ranges'),
 				...(flag('seed') !== undefined ? { seed: seed(flag('seed')!) } : {}),
 				...(flag('nodes') ? { nodes: list(flag('nodes')!) } : {})
@@ -171,8 +171,8 @@ export function parseOp(words: readonly string[], args: ParsedArgs, cloud = fals
 		case 'table distribute':
 			body = {
 				op: 'table.distribute',
-				table: need(rest[0], 'table distribute needs a table: shards table distribute <schema.table> --column C --keyspace K'),
-				column: need(flag('column'), 'table distribute needs --column, the shard key column'),
+				table: need(rest[0], 'table distribute needs a table: cluster table distribute <schema.table> --column C --keyspace K'),
+				column: need(flag('column'), 'table distribute needs --column, the distribution key column'),
 				keyspace: need(flag('keyspace'), 'table distribute needs --keyspace')
 			};
 			break;
@@ -180,7 +180,7 @@ export function parseOp(words: readonly string[], args: ParsedArgs, cloud = fals
 		case 'table global':
 			body = {
 				op: `table.${verb}`,
-				table: need(rest[0], `table ${verb} needs a table: shards table ${verb} <schema.table>`)
+				table: need(rest[0], `table ${verb} needs a table: cluster table ${verb} <schema.table>`)
 			};
 			break;
 		case 'range split': {
@@ -206,7 +206,7 @@ export function parseOp(words: readonly string[], args: ParsedArgs, cloud = fals
 		}
 		case 'range merge': {
 			if (rest.length !== 2) {
-				throw new UsageError('range merge needs two adjacent ranges: shards range merge <keyspace:lo> <keyspace:lo>');
+				throw new UsageError('range merge needs two adjacent ranges: cluster range merge <keyspace:lo> <keyspace:lo>');
 			}
 			const a = rangeRef(rest[0], args);
 			const b = rangeRef(rest[1], args);
@@ -221,7 +221,7 @@ export function parseOp(words: readonly string[], args: ParsedArgs, cloud = fals
 			const value = flag('value') ?? (flag('keyspace') ? rest[0] : rest[1]);
 			body = {
 				op: 'tenant.pin',
-				keyspace: need(keyspace, 'tenant pin needs a keyspace: shards tenant pin <keyspace> <value> [--node N]'),
+				keyspace: need(keyspace, 'tenant pin needs a keyspace: cluster tenant pin <keyspace> <value> [--node N]'),
 				value: need(value, 'tenant pin needs the key value to pin (--value V for one that starts with a dash)'),
 				...(flag('node') ? { node: flag('node') } : {})
 			};
@@ -246,7 +246,7 @@ export function parseOp(words: readonly string[], args: ParsedArgs, cloud = fals
 			body = { op: 'cleanup', ...optionalString(args, 'node', 'node') };
 			break;
 		default:
-			throw new UsageError(`unknown operation: shards ${words.join(' ')}. One of ${OP_HELP}`);
+			throw new UsageError(`unknown operation: cluster ${words.join(' ')}. One of ${OP_HELP}`);
 	}
 	for (const [setting, name] of Object.entries(SETTING_FLAGS)) {
 		const value = optionalInteger(args, name, setting);
@@ -313,13 +313,13 @@ export function rangeRef(word: string | undefined, args: ParsedArgs): { keyspace
 		const at = word.lastIndexOf(':');
 		const keyspace = word.slice(0, at);
 		if (!keyspace) {
-			throw new UsageError(`a range is keyspace:lo, as shards status prints it, not "${word}"`);
+			throw new UsageError(`a range is keyspace:lo, as cluster status prints it, not "${word}"`);
 		}
 		return { keyspace, lo: bound(word.slice(at + 1), `the range's lower bound in "${word}"`) };
 	}
 	const lo = rangeFlag ?? word;
 	if (!keyspaceFlag || lo === undefined) {
-		throw new UsageError('name the range as keyspace:lo (as shards status prints it), or with --keyspace K --range LO');
+		throw new UsageError('name the range as keyspace:lo (as cluster status prints it), or with --keyspace K --range LO');
 	}
 	return { keyspace: keyspaceFlag, lo: bound(lo, '--range') };
 }
@@ -342,7 +342,7 @@ function nodeSpec(word: string, args: ParsedArgs): Record<string, unknown> {
 /** A job id from a word, or a usage error. */
 function jobId(word: string | undefined, verb: string): number {
 	if (word === undefined || !/^\d+$/.test(word)) {
-		throw new UsageError(`jobs ${verb} needs a job id: shards jobs ${verb} <id>`);
+		throw new UsageError(`jobs ${verb} needs a job id: cluster jobs ${verb} <id>`);
 	}
 	return Number(word);
 }
@@ -357,7 +357,7 @@ export interface ShardsOptions {
 	timeoutMs?: number | undefined;
 }
 
-/** `snoutdata shards <words>`. Returns the exit code; failures are thrown. */
+/** `snoutdata cluster <words>`. Returns the exit code; failures are thrown. */
 export async function shards(args: ParsedArgs, options: ShardsOptions = {}): Promise<number> {
 	const words = args.command.slice(1);
 	const [first, second, third] = words;
@@ -370,11 +370,11 @@ export async function shards(args: ParsedArgs, options: ShardsOptions = {}): Pro
 		case 'enable': {
 			// The Cloud's own step: the router joins the project's pod, a restart of the database.
 			if (!cloud) {
-				throw new UsageError('shards enable is for a SnoutData Cloud project: shards enable --project <ref>. A standalone router is sharded from the moment it runs');
+				throw new UsageError('cluster enable is for a SnoutData Cloud project: cluster enable --project <ref>. A standalone router is a cluster from the moment it runs');
 			}
 			const shards = client();
 			if (!(shards instanceof CloudShardsClient)) {
-				throw new UsageError('shards enable needs --project <ref>');
+				throw new UsageError('cluster enable needs --project <ref>');
 			}
 			if (flagBoolean(args, 'plan')) {
 				const plan = (await shards.enable(true)) as Plan;
@@ -383,11 +383,11 @@ export async function shards(args: ParsedArgs, options: ShardsOptions = {}): Pro
 			}
 			if (!flagBoolean(args, 'yes')) {
 				if (!options.confirm && !canAsk()) {
-					throw new UsageError('turning sharding on restarts the database once, and nothing was asked: pass --yes, or --plan to see what it does');
+					throw new UsageError('making it a cluster restarts the database once, and nothing was asked: pass --yes, or --plan to see what it does');
 				}
 				printPlan((await shards.enable(true)) as Plan, process.stderr);
 				const ask = options.confirm ?? confirm;
-				if (!(await ask(`Turn sharding on for ${shards.target}?`))) {
+				if (!(await ask(`Make a cluster of ${shards.target}?`))) {
 					throw new CliFailure('failed', 'Not turned on. Nothing was changed.');
 				}
 			}
@@ -478,7 +478,7 @@ async function runOp(parsed: ParsedOp, args: ParsedArgs, client: () => ShardsCli
 	if (flagBoolean(args, 'no-wait')) {
 		emit({ job: submitted.job, state: 'pending', plan: submitted.plan }, () => {
 			process.stdout.write(`${submitted.job}\n`);
-			say(`Job ${submitted.job} (${label}) is queued. Follow it: snoutdata shards jobs watch ${submitted.job}`);
+			say(`Job ${submitted.job} (${label}) is queued. Follow it: snoutdata cluster jobs watch ${submitted.job}`);
 		});
 		return 0;
 	}
@@ -579,13 +579,13 @@ async function jobsCommand(verb: string | undefined, word: string | undefined, a
 			const id = jobId(word, 'resume');
 			const result = await client.resume(id);
 			if (flagBoolean(args, 'no-wait')) {
-				emit(result, () => say(`Job ${id}: ${result.state}. Follow it: snoutdata shards jobs watch ${id}`));
+				emit(result, () => say(`Job ${id}: ${result.state}. Follow it: snoutdata cluster jobs watch ${id}`));
 				return 0;
 			}
 			return finished(await follow(client, id, options));
 		}
 		default:
-			throw new UsageError(`unknown command: shards jobs ${verb}. jobs [list|show|watch|cancel|resume] <id>`);
+			throw new UsageError(`unknown command: cluster jobs ${verb}. jobs [list|show|watch|cancel|resume] <id>`);
 	}
 }
 
@@ -615,7 +615,7 @@ export async function follow(client: ShardsClient, id: number, options: ShardsOp
 		if (Date.now() >= deadline) {
 			throw new CliFailure(
 				'timeout',
-				`job ${id} is still ${job.state}; it carries on without this command. Follow it again: snoutdata shards jobs watch ${id}`,
+				`job ${id} is still ${job.state}; it carries on without this command. Follow it again: snoutdata cluster jobs watch ${id}`,
 				{ job }
 			);
 		}
@@ -629,7 +629,7 @@ function finished(job: Job): number {
 		emit(job, () => process.stdout.write(`Job ${job.id} (${job.op}): done, ${job.steps.length} step${job.steps.length === 1 ? '' : 's'}.\n`));
 		return 0;
 	}
-	const why = job.state === 'failed' ? `failed: ${job.error ?? 'no reason recorded'}. Resume it from the failed step: snoutdata shards jobs resume ${job.id}` : 'was cancelled';
+	const why = job.state === 'failed' ? `failed: ${job.error ?? 'no reason recorded'}. Resume it from the failed step: snoutdata cluster jobs resume ${job.id}` : 'was cancelled';
 	throw new CliFailure('failed', `job ${job.id} (${job.op}) ${why}`, { job });
 }
 
@@ -693,12 +693,12 @@ function shellWord(value: unknown): string {
 }
 
 /**
- * The `snoutdata shards` command that runs a recommendation, or null for one this CLI has no
+ * The `snoutdata cluster` command that runs a recommendation, or null for one this CLI has no
  * words for. A `node.add` that still needs an address gets a placeholder a person must replace.
  */
 export function commandFor(request: OpBody): string | null {
 	const r = request as Record<string, unknown>;
-	const base = 'snoutdata shards';
+	const base = 'snoutdata cluster';
 	switch (request.op) {
 		case 'range.split':
 			return `${base} range split ${shellWord(`${r.keyspace}:${r.range}`)}${r.at !== undefined ? ` --at ${shellWord(r.at)}` : ''}${r.to !== undefined ? ` --to ${shellWord(r.to)}` : ''}`;
@@ -831,9 +831,9 @@ export function printStatus(status: ClusterStatus): void {
 export function podStep(cloud: CloudShardsView, pod: CloudPod): string {
 	switch (pod.next) {
 		case 'attach':
-			return `ready: snoutdata shards nodes attach ${pod.ref} --project ${cloud.ref}`;
+			return `ready: snoutdata cluster nodes attach ${pod.ref} --project ${cloud.ref}`;
 		case 'delete-pod':
-			return `let go by the cluster: snoutdata shards nodes remove ${pod.ref} --project ${cloud.ref} deletes its pod`;
+			return `let go by the cluster: snoutdata cluster nodes remove ${pod.ref} --project ${cloud.ref} deletes its pod`;
 		case 'wait':
 			return `being made (${pod.state})`;
 		default:
@@ -861,9 +861,9 @@ export function slotsPhrase(cloud: Pick<CloudShardsView, 'projectsUsed' | 'maxPr
 function printCloud(cloud: CloudShardsView, out: Out): void {
 	const limit = slotsPhrase(cloud);
 	if (!cloud.sharded) {
-		line(out, `${bold(cloud.ref)} is not sharded (${limit}).`);
+		line(out, `${bold(cloud.ref)} is not a cluster (${limit}).`);
 		if (spareSlots(cloud) > 0) {
-			line(out, `Turn it on: snoutdata shards enable --project ${cloud.ref} (the database restarts once).`);
+			line(out, `Make it a cluster: snoutdata cluster enable --project ${cloud.ref} (the database restarts once).`);
 		}
 		return;
 	}

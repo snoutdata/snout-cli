@@ -75,7 +75,7 @@ function operations(): McpOperations {
 			}
 			if (!process.env.LEPIS_ADMIN_URL) {
 				throw new Error(
-					"The shards tools need a cluster: pass project (a SnoutData Cloud project's ref, from list_projects), or start snoutdata mcp with LEPIS_ADMIN_URL (a standalone router's admin API, e.g. http://127.0.0.1:7432) and LEPIS_ADMIN_TOKEN set."
+					"The cluster tools need a cluster: pass project (a SnoutData Cloud project's ref, from list_projects), or start snoutdata mcp with LEPIS_ADMIN_URL (a standalone router's admin API, e.g. http://127.0.0.1:7432) and LEPIS_ADMIN_TOKEN set."
 				);
 			}
 			shards ??= shardsClient({});
@@ -292,7 +292,7 @@ export async function serve(options: Omit<McpOptions, 'version'> & { version: st
 		}
 		// A standalone Lepis cluster needs no account: serve its tools, and let the cloud ones
 		// say what they need when they are called.
-		warn(`snoutdata mcp: not signed in, so only the shards tools will work (router ${process.env.LEPIS_ADMIN_URL}).`);
+		warn(`snoutdata mcp: not signed in, so only the cluster tools will work (router ${process.env.LEPIS_ADMIN_URL}).`);
 	}
 
 	// Reported once, on stderr, because a person who ran this by hand in a terminal sees
