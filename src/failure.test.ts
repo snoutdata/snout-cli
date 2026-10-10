@@ -182,7 +182,7 @@ test('an unknown flag is refused rather than ignored', { skip: built ? false : '
 	for (const flag of ['--yes', '--token']) {
 		const result = run(['whoami', flag, 'x']);
 		assert.equal(result.code, EXIT.usage, `${flag} did not exit ${EXIT.usage}`);
-		assert.match(result.stderr, /only for snoutdata shards/, `${flag} was accepted`);
+		assert.match(result.stderr, /only for snoutdata cluster/, `${flag} was accepted`);
 	}
 });
 
