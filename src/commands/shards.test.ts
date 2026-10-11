@@ -11,7 +11,7 @@ import { CliFailure } from '../failure.js';
 import { setInteractive } from '../interactive.js';
 import { setQuiet } from '../output.js';
 import { CloudShardsClient, type Advice, type Job, type OpBody, type Plan, type ShardsClient } from '../shardsClient.js';
-import { commandFor, describeBytes, follow, parseOp, parseSet, podStep, printAdvice, shards, slotsPhrase, spareSlots } from './shards.js';
+import { commandFor, describeBytes, follow, parseOp, parseSet, podStep, printAdvice, printAlerts, replicaPhrase, shards, slotsPhrase, spareSlots } from './shards.js';
 
 setQuiet(true);
 // Nobody at a terminal, as in CI: the gate's default.
@@ -405,11 +405,11 @@ describe('shards --project: a SnoutData Cloud project, through cloud-project-sha
 			const b = body as Record<string, unknown>;
 			sent.push(b);
 			const action = String(b.action);
+			if (action === 'plan' || b.plan === true) {
+				return PLAN as T;
+			}
 			if (action in answers) {
 				return answers[action] as T;
-			}
-			if (action === 'plan' || (action === 'enable' && b.plan === true)) {
-				return PLAN as T;
 			}
 			return {} as T;
 		});
@@ -499,6 +499,68 @@ describe('shards --project: a SnoutData Cloud project, through cloud-project-sha
 		assert.equal(podStep(view, joining), 'joining: taking its share of the data');
 		const stopped = { ...view.pods[0]!, next: 'attach' as const, joining: 'failed' as const, joinError: 'no room' };
 		assert.equal(podStep(view, stopped), 'stopped joining: no room. Retry: snoutdata cluster retry qrstvwxyzabcd --project abcdefghjkmnp');
+	});
+
+	test('replica add and remove ask first like spread, send the node, and are Cloud only', async () => {
+		const { client, sent } = cloud({
+			'add-replica': { node: 'qrstvwxyzabcd', replica: 'efghjkmnpqrst', note: 'It protects the node once it is following it.' },
+			'remove-replica': { node: 'qrstvwxyzabcd', changed: true }
+		});
+		await assert.rejects(run(['replica', 'add', 'qrstvwxyzabcd', '--project', 'abcdefghjkmnp'], { client }), (e: unknown) => e instanceof UsageError && /project slot/.test(e.message));
+		assert.deepEqual(sent, []);
+		await assert.rejects(run(['replica', 'add', 'qrstvwxyzabcd', '--yes'], { client }), UsageError);
+		await assert.rejects(run(['replica', 'add', '--project', 'abcdefghjkmnp', '--yes'], { client }), UsageError);
+		await assert.rejects(run(['replica', 'swap', 'qrstvwxyzabcd', '--project', 'abcdefghjkmnp', '--yes'], { client }), UsageError);
+		assert.deepEqual(sent, []);
+		assert.equal(await run(['replica', 'add', 'qrstvwxyzabcd', '--project', 'abcdefghjkmnp', '--plan'], { client }), 0);
+		assert.deepEqual(sent.pop(), { ref: 'abcdefghjkmnp', action: 'add-replica', node: 'qrstvwxyzabcd', plan: true });
+		assert.equal(await run(['replica', 'add', 'qrstvwxyzabcd', '--project', 'abcdefghjkmnp', '--yes'], { client }), 0);
+		assert.deepEqual(sent.pop(), { ref: 'abcdefghjkmnp', action: 'add-replica', node: 'qrstvwxyzabcd' });
+		// A person is shown the plan and asked; a no sends nothing past the plan.
+		await assert.rejects(run(['replica', 'remove', '--node', 'qrstvwxyzabcd', '--project', 'abcdefghjkmnp'], { client, confirm: async () => false }), CliFailure);
+		assert.deepEqual(sent.pop(), { ref: 'abcdefghjkmnp', action: 'remove-replica', node: 'qrstvwxyzabcd', plan: true });
+		assert.equal(await run(['replica', 'remove', 'qrstvwxyzabcd', '--project', 'abcdefghjkmnp'], { client, confirm: async () => true }), 0);
+		assert.deepEqual(sent.splice(0), [
+			{ ref: 'abcdefghjkmnp', action: 'remove-replica', node: 'qrstvwxyzabcd', plan: true },
+			{ ref: 'abcdefghjkmnp', action: 'remove-replica', node: 'qrstvwxyzabcd' }
+		]);
+	});
+
+	test('alerts list from status, and seen marks one by its id without asking', async () => {
+		const alert = { id: '0f4c2a9e-1b2c-4d5e-8f90-123456789abc', kind: 'node-failing', node: 'qrstvwxyzabcd', severity: 'critical', message: 'node qrstvwxyzabcd is lost.', openedAt: '2026-10-11T10:00:00Z', resolvedAt: null, resolution: null, acknowledged: false };
+		const { client, sent } = cloud({ status: { ref: 'abcdefghjkmnp', sharded: true, pods: [], alerts: [alert], cluster: null }, acknowledge: { alert: alert.id, acknowledged: true } });
+		assert.deepEqual(await client.alerts(), [alert]);
+		assert.equal(await run(['alerts', '--project', 'abcdefghjkmnp'], { client }), 0);
+		assert.equal(await run(['alerts', 'seen', alert.id, '--project', 'abcdefghjkmnp'], { client }), 0);
+		assert.deepEqual(sent.at(-1), { ref: 'abcdefghjkmnp', action: 'acknowledge', alert: alert.id });
+		await assert.rejects(run(['alerts', 'seen', 'latest', '--project', 'abcdefghjkmnp'], { client }), UsageError);
+		await assert.rejects(run(['alerts'], { client }), UsageError);
+	});
+
+	test('status puts open alerts first and says, per node, whether a replica protects it', () => {
+		const base = { ref: 'qrstvwxyzabcd', ordinal: 2, state: 'ready', desiredState: 'running', hasOwnBackup: true, standbyOf: null, node: { id: 2, state: 'active' }, next: null, replicaOf: null, replica: null, wantsReplica: false, failover: null, failoverError: null };
+		assert.equal(replicaPhrase(base), 'no replica');
+		assert.equal(replicaPhrase({ ...base, replica: 'efghjkmnpqrst' }), 'protected by replica efghjkmnpqrst');
+		assert.equal(replicaPhrase({ ...base, wantsReplica: true }), 'no replica yet: one is being made');
+		assert.equal(replicaPhrase({ ...base, failover: 'promote' }), 'failing over: its replica is taking its place');
+		assert.equal(replicaPhrase({ ...base, failover: 'failed', failoverError: 'no standby' }), 'failover stopped: no standby');
+		const replica = { ...base, ref: 'efghjkmnpqrst', node: null, replicaOf: 'qrstvwxyzabcd' };
+		assert.equal(replicaPhrase(replica), 'replica of node qrstvwxyzabcd');
+		const view = { ref: 'abcdefghjkmnp', sharded: true, projectsUsed: 3, maxProjects: 5, tier: 'pro', desiredNodes: 2, maxWritePauseMs: null, routerError: null, pods: [base, replica] };
+		assert.equal(podStep(view, replica), 'replica of node qrstvwxyzabcd (ready)');
+		// An older control plane says nothing about replicas, and nothing is said for it.
+		const { replicaOf: _r, replica: _p, wantsReplica: _w, failover: _f, failoverError: _e, ...older } = base;
+		assert.equal(replicaPhrase(older), '');
+		let printed = '';
+		const out = { write: (text: string) => (printed += text) };
+		const alert = (severity: 'critical' | 'info', resolvedAt: string | null) => ({ id: '0f4c2a9e-1b2c-4d5e-8f90-123456789abc', kind: 'node-failing', node: null, severity, message: `${severity} message.`, openedAt: '2026-10-11T10:00:00Z', resolvedAt, resolution: resolvedAt ? 'Done.' : null, acknowledged: false });
+		printAlerts([alert('critical', null), alert('info', '2026-10-11T11:00:00Z')], out, false, 'abcdefghjkmnp');
+		assert.match(printed, /CRITICAL critical message\./);
+		assert.doesNotMatch(printed, /info message/);
+		printed = '';
+		printAlerts([alert('critical', null), alert('info', '2026-10-11T11:00:00Z')], out, true);
+		assert.match(printed, /0f4c2a9e-1b2c-4d5e-8f90-123456789abc/);
+		assert.match(printed, /Resolved in the last day:\n  info message\. Done\./);
 	});
 
 	test('each node uses a project slot: offered while one is spare, said beside the count', () => {

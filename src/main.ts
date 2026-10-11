@@ -159,6 +159,10 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
                                            each with --plan for the dry run (size, copy time,
                                            expected pause); one that moves or deletes data asks,
                                            or takes --yes. Waits for its job unless --no-wait
+  snoutdata cluster replica add|remove NODE --project REF   a copy of a data node that takes its
+                                           place on its own if it is lost or corrupt; one
+                                           project slot each
+  snoutdata cluster alerts [seen <id>] --project REF   what happened to the cluster that needs you
   snoutdata cluster plan <operation>        the same dry run
   snoutdata cluster jobs [show|watch|cancel|resume <id>]   the durable job log
   snoutdata cluster settings [--max-write-pause-ms N ...] [--set advice_min_bytes=N,...]

@@ -108,6 +108,29 @@ export interface CloudPod {
 	/** How far its automatic join is (copying, joining, spreading), or failed. Absent from older control planes. */
 	joining?: 'copying' | 'joining' | 'spreading' | 'failed' | null;
 	joinError?: string | null;
+	/** Set on a replica: the node it follows and protects. A replica is never attached. Absent from older control planes. */
+	replicaOf?: string | null;
+	/** On a node: its replica's ref, when it has one. */
+	replica?: string | null;
+	/** The owner asked for a replica; a new one follows a failover. */
+	wantsReplica?: boolean;
+	/** A failover of this node to its replica: stopping the node, promoting the replica, or stopped. */
+	failover?: 'fence' | 'promote' | 'failed' | null;
+	failoverError?: string | null;
+}
+
+/** Something that happened to a cluster that its owner must know about (L18, migration 174). */
+export interface ClusterAlert {
+	id: string;
+	/** corruption, node-failing, failover-done, failover-failed, replica-missing or replica-behind. */
+	kind: string;
+	node: string | null;
+	severity: 'info' | 'warning' | 'critical';
+	message: string;
+	openedAt: string;
+	resolvedAt: string | null;
+	resolution: string | null;
+	acknowledged: boolean;
 }
 
 /** What `cloud-project-shards` says about a project besides its router's status. */
@@ -128,6 +151,8 @@ export interface CloudShardsView {
 	routerError: string | null;
 	/** A request the cluster is finishing on its own, such as a table being spread. */
 	automation?: { active: boolean; queue: string[]; queueJob: number | null; queueError: string | null } | null;
+	/** Open alerts first, then those resolved in the last day. Absent from older control planes. */
+	alerts?: ClusterAlert[];
 }
 
 export type JobState = 'pending' | 'running' | 'done' | 'failed' | 'cancelling' | 'cancelled';
@@ -595,6 +620,24 @@ export class CloudShardsClient implements ShardsClient {
 		return this.#send({ action: 'disable', ...(planOnly ? { plan: true } : {}) });
 	}
 
+	/**
+	 * A replica for a data node (one project slot; it follows the node and takes its place on its
+	 * own if the node is lost or corrupt), or no more replica for it. `planOnly` says what it costs.
+	 */
+	replica(node: string, remove: boolean, planOnly: boolean): Promise<Plan | Record<string, unknown>> {
+		return this.#send({ action: remove ? 'remove-replica' : 'add-replica', node, ...(planOnly ? { plan: true } : {}) });
+	}
+
+	/** The cluster's alerts: open ones first, then those resolved in the last day. */
+	async alerts(): Promise<ClusterAlert[]> {
+		return (await this.status()).cloud?.alerts ?? [];
+	}
+
+	/** Marks an alert as seen. It stays open until what it is about is over. */
+	acknowledge(alert: string): Promise<Record<string, unknown>> {
+		return this.#send({ action: 'acknowledge', alert });
+	}
+
 	#action(body: OpBody): string {
 		const action = CLOUD_ACTIONS[body.op];
 		if (!action) {
@@ -641,6 +684,15 @@ export function describeCloudAnswer(answer: Record<string, unknown>): string {
 	}
 	if (answer.queue === 'retrying') {
 		return 'The cluster is trying that step again.';
+	}
+	if (typeof answer.replica === 'string' && typeof answer.node === 'string') {
+		return `A replica of node ${answer.node} is being made (${answer.replica}). ${String(answer.note ?? 'It protects the node once it is following it.')}`;
+	}
+	if (typeof answer.changed === 'boolean' && typeof answer.node === 'string' && answer.sharded === undefined) {
+		return answer.changed ? `The replica of node ${answer.node} is being removed, and its project slot freed.` : `node ${answer.node} has no replica. Nothing changed.`;
+	}
+	if (answer.acknowledged === true) {
+		return 'Marked as seen. The alert stays open until what it is about is over.';
 	}
 	if (answer.unchanged === true) {
 		return `The project already has ${String(answer.nodes)} nodes. Nothing changed.`;

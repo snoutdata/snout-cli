@@ -47,6 +47,7 @@ import {
 	type AdviceSettingName,
 	type CloudPod,
 	type CloudShardsView,
+	type ClusterAlert,
 	type ClusterStatus,
 	type Job,
 	type JobSummary,
@@ -483,6 +484,71 @@ export async function shards(args: ParsedArgs, options: ShardsOptions = {}): Pro
 				: await shards.retry({ node: required(second ?? flagString(args, 'node'), 'cluster retry needs the node pod whose join stopped, or --queue') });
 			emit(answer, () => say(describeCloudAnswer(answer)));
 			return 0;
+		}
+		case 'replica': {
+			// A data node's replica (L16): a copy that follows it and takes its place on its own if
+			// it is lost or corrupt. It takes a project slot, so adding one asks like spread does,
+			// and removing one leaves the node unprotected, so that asks too.
+			if (!cloud) {
+				throw new UsageError('cluster replica is for a SnoutData Cloud project (--project): cluster replica add|remove <node-ref> --project <ref>');
+			}
+			if (second !== 'add' && second !== 'remove') {
+				throw new UsageError('cluster replica add|remove <node-ref> --project <ref>: the node pod, as cluster status lists it');
+			}
+			const shards = client();
+			if (!(shards instanceof CloudShardsClient)) {
+				throw new UsageError('cluster replica needs --project <ref>');
+			}
+			const remove = second === 'remove';
+			const node = required(third ?? flagString(args, 'node'), `cluster replica ${second} needs the node pod's ref, as cluster status lists it`);
+			if (flagBoolean(args, 'plan')) {
+				const plan = (await shards.replica(node, remove, true)) as Plan;
+				emit(plan, () => printPlan(plan, process.stdout));
+				return 0;
+			}
+			if (!flagBoolean(args, 'yes')) {
+				if (!options.confirm && !canAsk()) {
+					throw new UsageError(
+						remove
+							? 'removing a replica leaves the node without one, and nothing was asked: pass --yes, or --plan to see what it does'
+							: 'a replica takes one project slot, and nothing was asked: pass --yes, or --plan to see what it does'
+					);
+				}
+				printPlan((await shards.replica(node, remove, true)) as Plan, process.stderr);
+				const ask = options.confirm ?? confirm;
+				if (!(await ask(remove ? `Remove the replica of node ${node}?` : `Add a replica to node ${node}?`))) {
+					throw new CliFailure('failed', 'Nothing was changed.');
+				}
+			}
+			const answer = (await shards.replica(node, remove, false)) as Record<string, unknown>;
+			emit(answer, () => say(describeCloudAnswer(answer)));
+			return 0;
+		}
+		case 'alerts': {
+			// What happened to the cluster that its owner must know about (L18). Seeing one
+			// changes nothing in the cluster, so it never asks.
+			if (!cloud) {
+				throw new UsageError('cluster alerts is for a SnoutData Cloud project (--project <ref>)');
+			}
+			const shards = client();
+			if (!(shards instanceof CloudShardsClient)) {
+				throw new UsageError('cluster alerts needs --project <ref>');
+			}
+			if (second === undefined || second === 'list') {
+				const alerts = await shards.alerts();
+				emit({ alerts }, () => printAlerts(alerts, process.stdout, true, shards.ref));
+				return 0;
+			}
+			if (second === 'seen' || second === 'acknowledge') {
+				const id = required(third, `cluster alerts ${second} needs the alert's id, as cluster alerts lists it`);
+				if (!/^[0-9a-f-]{36}$/i.test(id)) {
+					throw new UsageError(`not an alert id: ${id} (as cluster alerts lists it)`);
+				}
+				const answer = await shards.acknowledge(id.toLowerCase());
+				emit(answer, () => say(describeCloudAnswer(answer)));
+				return 0;
+			}
+			throw new UsageError(`unknown command: cluster alerts ${second}. alerts [list], or alerts seen <id>`);
 		}
 		case undefined:
 		case 'status': {
@@ -929,6 +995,9 @@ export function podStep(cloud: CloudShardsView, pod: CloudPod): string {
 	if (pod.joining === 'failed' && pod.next !== 'delete-pod') {
 		return `stopped joining: ${pod.joinError ?? 'see the audit log'}. Retry: snoutdata cluster retry ${pod.ref} --project ${cloud.ref}`;
 	}
+	if (pod.replicaOf) {
+		return `replica of node ${pod.replicaOf} (${pod.state})`;
+	}
 	switch (pod.next) {
 		case 'attach':
 			return `ready: snoutdata cluster nodes attach ${pod.ref} --project ${cloud.ref}`;
@@ -940,6 +1009,71 @@ export function podStep(cloud: CloudShardsView, pod: CloudPod): string {
 			return pod.joining === 'spreading' ? 'joining: taking its share of the data' : pod.joining === 'joining' ? 'joining the cluster' : `joining: starting as a copy of the home node (${pod.state})`;
 		default:
 			return pod.node ? `node ${pod.node.id}, ${pod.node.state}` : pod.state;
+	}
+}
+
+/**
+ * Whether a node is protected by a replica, is one, or is failing over to one, as a phrase. Empty
+ * for a pod an older control plane describes without replicas.
+ */
+export function replicaPhrase(pod: CloudPod): string {
+	if (pod.replicaOf) {
+		return `replica of node ${pod.replicaOf}`;
+	}
+	switch (pod.failover) {
+		case 'fence':
+			return 'failing over: stopping the node so its replica can take its place';
+		case 'promote':
+			return 'failing over: its replica is taking its place';
+		case 'failed':
+			return `failover stopped: ${pod.failoverError ?? 'see cluster alerts'}`;
+	}
+	if (pod.desiredState === 'deleted' || pod.replicaOf === undefined) {
+		return '';
+	}
+	if (pod.replica) {
+		return `protected by replica ${pod.replica}`;
+	}
+	return pod.wantsReplica ? 'no replica yet: one is being made' : 'no replica';
+}
+
+/** Severity as a word a person scans for: CRITICAL, WARNING, INFO. */
+function severityWord(alert: ClusterAlert): string {
+	return alert.severity.toUpperCase();
+}
+
+/**
+ * The cluster's alerts. `all`: every one with its id (what `cluster alerts` prints); otherwise only
+ * the open ones, as the head of `cluster status`.
+ */
+export function printAlerts(alerts: readonly ClusterAlert[], out: Out, all: boolean, ref = '<ref>'): void {
+	const open = alerts.filter((a) => a.resolvedAt === null);
+	const resolved = alerts.filter((a) => a.resolvedAt !== null);
+	if (!all) {
+		for (const alert of open) {
+			line(out, `${bold(severityWord(alert))} ${alert.message}${alert.acknowledged ? dim(' (seen)') : ''}`);
+		}
+		if (open.length > 0) {
+			line(out, dim(`  See them all, and mark one as seen: snoutdata cluster alerts --project ${ref}`));
+		}
+		return;
+	}
+	if (alerts.length === 0) {
+		say('No alerts. Nothing has happened to this cluster that needs you.');
+		return;
+	}
+	for (const alert of open) {
+		line(out, `${bold(severityWord(alert))} ${alert.message}`);
+		line(out, dim(`  ${alert.id}, opened ${alert.openedAt.slice(0, 16).replace('T', ' ')}${alert.acknowledged ? ', seen' : ''}`));
+	}
+	if (resolved.length > 0) {
+		if (open.length > 0) {
+			line(out);
+		}
+		line(out, 'Resolved in the last day:');
+		for (const alert of resolved) {
+			line(out, `  ${alert.message}${alert.resolution ? ` ${dim(alert.resolution)}` : ''}`);
+		}
 	}
 }
 
@@ -969,10 +1103,20 @@ function printCloud(cloud: CloudShardsView, out: Out): void {
 		}
 		return;
 	}
-	const nodes = 1 + cloud.pods.filter((p) => p.desiredState !== 'deleted').length;
-	line(out, `${bold(cloud.ref)}: ${nodes} node${nodes === 1 ? '' : 's'}, ${limit}`);
+	printAlerts(cloud.alerts ?? [], out, false, cloud.ref);
+	const live = cloud.pods.filter((p) => p.desiredState !== 'deleted');
+	const nodes = 1 + live.filter((p) => !p.replicaOf).length;
+	const replicas = live.length - (nodes - 1);
+	line(out, `${bold(cloud.ref)}: ${nodes} node${nodes === 1 ? '' : 's'}${replicas > 0 ? ` and ${replicas} replica${replicas === 1 ? '' : 's'}` : ''}, ${limit}`);
 	if (cloud.pods.length > 0) {
-		line(out, table([['  POD', 'STATE', 'NEXT'], ...cloud.pods.map((p) => [`  ${p.ref}`, p.state, podStep(cloud, p)])]));
+		const withReplicas = cloud.pods.some((p) => p.replicaOf !== undefined);
+		line(
+			out,
+			table([
+				['  POD', 'STATE', 'NEXT', ...(withReplicas ? ['REPLICA'] : [])],
+				...cloud.pods.map((p) => [`  ${p.ref}`, p.state, podStep(cloud, p), ...(withReplicas ? [replicaPhrase(p)] : [])])
+			])
+		);
 	}
 	if (cloud.router === 'starting') {
 		line(out, 'The router is starting beside the database, which takes about twenty seconds.');
