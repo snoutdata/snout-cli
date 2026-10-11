@@ -100,8 +100,14 @@ export interface CloudPod {
 	hasOwnBackup: boolean;
 	standbyOf: string | null;
 	node: { id: number; state: string } | null;
-	/** attach: ready and not in the catalog. delete-pod: the catalog let it go. wait: still being made. */
-	next: 'attach' | 'delete-pod' | 'wait' | null;
+	/**
+	 * attach: ready and not in the catalog, joining by hand. delete-pod: the catalog let it go.
+	 * wait: still being made. joining: the cluster is bringing it in on its own.
+	 */
+	next: 'attach' | 'delete-pod' | 'wait' | 'joining' | null;
+	/** How far its automatic join is (copying, joining, spreading), or failed. Absent from older control planes. */
+	joining?: 'copying' | 'joining' | 'spreading' | 'failed' | null;
+	joinError?: string | null;
 }
 
 /** What `cloud-project-shards` says about a project besides its router's status. */
@@ -116,7 +122,12 @@ export interface CloudShardsView {
 	desiredNodes: number;
 	maxWritePauseMs: number | null;
 	pods: CloudPod[];
+	/** ready, starting (the restart after enable, or a wake), paused, or unreachable. */
+	router?: 'ready' | 'starting' | 'paused' | 'unreachable' | null;
+	/** Set only when the router is really not answering, never while it starts. */
 	routerError: string | null;
+	/** A request the cluster is finishing on its own, such as a table being spread. */
+	automation?: { active: boolean; queue: string[]; queueJob: number | null; queueError: string | null } | null;
 }
 
 export type JobState = 'pending' | 'running' | 'done' | 'failed' | 'cancelling' | 'cancelled';
@@ -566,6 +577,19 @@ export class CloudShardsClient implements ShardsClient {
 		return this.#send({ action: 'enable', ...(planOnly ? { plan: true } : {}) });
 	}
 
+	/**
+	 * Spreads one table over the cluster in one go (172): a keyspace for its key (reused when one
+	 * for that column and type exists), the table distributed, and a rebalance, run one after another.
+	 */
+	spread(request: { table: string; column: string; key_type: string }, planOnly: boolean): Promise<Plan | Record<string, unknown>> {
+		return this.#send({ action: 'spread', request, ...(planOnly ? { plan: true } : {}) });
+	}
+
+	/** Takes a stopped join (a node's ref) or the stopped queue up again. */
+	retry(target: { node: string } | { queue: true }): Promise<Record<string, unknown>> {
+		return this.#send({ action: 'retry', ...target });
+	}
+
 	/** Turns the cluster off (171): Lepis dissolves it, then the router leaves the pod. */
 	disable(planOnly: boolean): Promise<Plan | { sharded: boolean; changed: boolean; job?: number; next?: string; note?: string }> {
 		return this.#send({ action: 'disable', ...(planOnly ? { plan: true } : {}) });
@@ -579,7 +603,7 @@ export class CloudShardsClient implements ShardsClient {
 		const fields = body as Record<string, unknown>;
 		// In the Cloud a node is a pod the control plane makes; an address is never the caller's.
 		if (body.op === 'node.add' && (fields.host !== undefined || fields.name !== undefined)) {
-			throw new CliFailure('usage', 'in SnoutData Cloud a node is a pod the project makes: nodes add takes no name or --host. Attach it once it is ready: cluster nodes attach <ref>');
+			throw new CliFailure('usage', 'in SnoutData Cloud a node is a pod the project makes: nodes add takes no name or --host. It joins the cluster on its own once it is ready.');
 		}
 		if (body.op === 'scale' && (fields.add !== undefined || fields.remove !== undefined)) {
 			throw new CliFailure('usage', 'in SnoutData Cloud, scale takes --nodes N: how many nodes the project should have, the home included');
@@ -601,10 +625,22 @@ export function describeCloudAnswer(answer: Record<string, unknown>): string {
 	if (Array.isArray(answer.created)) {
 		const created = answer.created.map(String);
 		const stopped = typeof answer.stopped === 'string' ? ` Stopped there: ${answer.stopped}` : '';
-		return `New node pod${created.length === 1 ? '' : 's'} ${created.join(', ')}, restored from the home node's backup. Attach each once it is ready: snoutdata cluster nodes attach <ref>.${stopped}`;
+		const one = created.length === 1;
+		return answer.joining === false
+			? `New node${one ? '' : 's'} ${created.join(', ')}, starting as a copy of the home node. Attach ${one ? 'it' : 'each'} once it is ready: snoutdata cluster nodes attach <ref>.${stopped}`
+			: `New node${one ? '' : 's'} ${created.join(', ')}, starting as a copy of the home node. ${one ? 'It joins' : 'They join'} the cluster and take${one ? 's' : ''} ${one ? 'its' : 'their'} share of the data on ${one ? 'its' : 'their'} own; follow it with snoutdata cluster status.${stopped}`;
 	}
 	if (answer.deleted === true) {
 		return `The pod of ${String(answer.pod)} is being deleted. It owned nothing in the cluster.`;
+	}
+	if (Array.isArray(answer.queued)) {
+		return `${String(answer.next ?? 'The table is being spread over the cluster.')} Steps: ${answer.queued.map(String).join(', ')}. Follow it with snoutdata cluster status.`;
+	}
+	if (typeof answer.joining === 'boolean' && typeof answer.node === 'string') {
+		return answer.joining ? `${answer.node} is joining the cluster again.` : `${answer.node} is left as it is.`;
+	}
+	if (answer.queue === 'retrying') {
+		return 'The cluster is trying that step again.';
 	}
 	if (answer.unchanged === true) {
 		return `The project already has ${String(answer.nodes)} nodes. Nothing changed.`;

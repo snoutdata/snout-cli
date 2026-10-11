@@ -217,6 +217,10 @@ const KNOWN_BOOLEANS = new Set([
 	// pg_dump against somebody's production database.
 	'status',
 	'no-wait',
+	// `cluster nodes add --no-join`: a Cloud node attached by hand rather than joining on its own.
+	'no-join',
+	// `cluster retry --queue`: the stopped spread rather than a node.
+	'queue',
 	// `login --no-browser`: print the URL and wait, rather than trying to spawn anything.
 	// The case the loopback flow could never serve on its own: SSH, a container, WSL.
 	'no-browser',

@@ -231,7 +231,11 @@ describe('the Cloud form: a project, through cloud-project-shards', () => {
 	});
 
 	test('a pod made or deleted is said in a sentence, with the next step', () => {
-		assert.match(describeCloudAnswer({ created: ['qrstvwxyzabcd'] }), /nodes attach/);
+		// A node joins on its own now (172); one made with --no-join is attached by hand.
+		assert.match(describeCloudAnswer({ created: ['qrstvwxyzabcd'], joining: true }), /joins the cluster and takes its share of the data on its own/);
+		assert.match(describeCloudAnswer({ created: ['qrstvwxyzabcd'], joining: false }), /nodes attach/);
+		assert.doesNotMatch(describeCloudAnswer({ created: ['qrstvwxyzabcd'] }), /backup/);
+		assert.match(describeCloudAnswer({ queued: ['keyspace.create', 'table.distribute'], next: 'public.orders is being spread over the cluster, one step at a time.' }), /keyspace\.create, table\.distribute/);
 		assert.match(describeCloudAnswer({ pod: 'qrstvwxyzabcd', deleted: true }), /owned nothing/);
 		assert.match(describeCloudAnswer({ unchanged: true, nodes: 3 }), /already has 3/);
 	});

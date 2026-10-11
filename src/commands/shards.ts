@@ -6,8 +6,9 @@
  * moves or deletes data, and follows the job the router writes. It decides nothing about the
  * cluster a second time. The client it talks through (`shardsClient.ts`) is either a standalone
  * router (`--admin`) or a SnoutData Cloud project (`--project <ref>`, through the
- * `cloud-project-shards` Snout Function); in the Cloud a node is a pod, so `nodes add` makes one,
- * `nodes attach <ref>` hands a ready one to the cluster, `scale --nodes N` is a count, and
+ * `cloud-project-shards` Snout Function); in the Cloud a node is a pod, so `nodes add` makes one
+ * that joins the cluster and takes its share of the data on its own (`--no-join` to attach it by
+ * hand with `nodes attach <ref>`), `scale --nodes N` is a count, and
  * `enable` turns the router on. Each node pod counts as a project against the plan
  * (TBD-1/TBD-4), so a node is offered while the account has a project slot spare.
  *
@@ -110,9 +111,11 @@ export function parseOp(words: readonly string[], args: ParsedArgs, cloud = fals
 	// ready one is attached by its ref, and scale is a node count. Everything else is the same.
 	if (cloud && (named === 'nodes add' || named === 'node add')) {
 		if (rest.length > 0 || flag('host') !== undefined) {
-			throw new UsageError('in SnoutData Cloud a node is a pod the project makes: cluster nodes add --project <ref>, with no name or --host. Attach it once it is ready: cluster nodes attach <node-ref>');
+			throw new UsageError('in SnoutData Cloud a node is a pod the project makes: cluster nodes add --project <ref>, with no name or --host. It joins the cluster on its own once it is ready.');
 		}
-		return { body: { op: 'node.add' }, destructive: false };
+		// It joins on its own (attached when ready, then given its share of the data); --no-join
+		// leaves the attach to a person, as `cluster nodes attach <node-ref>`.
+		return { body: flagBoolean(args, 'no-join') ? { op: 'node.add', join: false } : { op: 'node.add' }, destructive: false };
 	}
 	if (named === 'nodes attach' || named === 'node attach') {
 		if (!cloud) {
@@ -434,6 +437,53 @@ export async function shards(args: ParsedArgs, options: ShardsOptions = {}): Pro
 			emit(answer, () => say(describeCloudAnswer(answer)));
 			return 0;
 		}
+		case 'spread': {
+			// The Cloud's one-go spread (172): keyspace, distribute, rebalance, as a queue.
+			if (!cloud) {
+				throw new UsageError('cluster spread is for a SnoutData Cloud project (--project). On a standalone router: cluster keyspace create, then cluster table distribute and cluster rebalance');
+			}
+			const shards = client();
+			if (!(shards instanceof CloudShardsClient)) {
+				throw new UsageError('cluster spread needs --project <ref>');
+			}
+			const request = {
+				table: second ?? required(flagString(args, 'table'), 'cluster spread needs the table: cluster spread <schema.table> --column C --key-type T'),
+				column: required(flagString(args, 'column'), 'cluster spread needs --column, the column to spread the rows by'),
+				key_type: required(flagString(args, 'key-type'), "cluster spread needs --key-type, the column's type (bigint, uuid, text, ...)")
+			};
+			if (flagBoolean(args, 'plan')) {
+				const plan = (await shards.spread(request, true)) as Plan;
+				emit(plan, () => printPlan(plan, process.stdout));
+				return 0;
+			}
+			if (!flagBoolean(args, 'yes')) {
+				if (!options.confirm && !canAsk()) {
+					throw new UsageError('spreading a table moves its rows, and nothing was asked: pass --yes, or --plan to see what it does');
+				}
+				printPlan((await shards.spread(request, true)) as Plan, process.stderr);
+				const ask = options.confirm ?? confirm;
+				if (!(await ask(`Spread ${request.table} over ${shards.target}?`))) {
+					throw new CliFailure('failed', 'Not spread. Nothing was changed.');
+				}
+			}
+			const answer = (await shards.spread(request, false)) as Record<string, unknown>;
+			emit(answer, () => say(describeCloudAnswer(answer)));
+			return 0;
+		}
+		case 'retry': {
+			if (!cloud) {
+				throw new UsageError('cluster retry is for a SnoutData Cloud project (--project): a stopped job on a standalone router is resumed with cluster jobs resume <id>');
+			}
+			const shards = client();
+			if (!(shards instanceof CloudShardsClient)) {
+				throw new UsageError('cluster retry needs --project <ref>');
+			}
+			const answer = flagBoolean(args, 'queue')
+				? await shards.retry({ queue: true })
+				: await shards.retry({ node: required(second ?? flagString(args, 'node'), 'cluster retry needs the node pod whose join stopped, or --queue') });
+			emit(answer, () => say(describeCloudAnswer(answer)));
+			return 0;
+		}
 		case undefined:
 		case 'status': {
 			const status = await client().status();
@@ -524,6 +574,14 @@ async function runOp(parsed: ParsedOp, args: ParsedArgs, client: () => ShardsCli
 	say(`Job ${submitted.job} (${label}) is queued; following it. Ctrl+C stops following, not the job.`);
 	const job = await follow(shards, submitted.job, options);
 	return finished(job);
+}
+
+/** A value the command cannot go on without, or the usage error that says so. */
+function required(value: string | undefined, what: string): string {
+	if (value === undefined || value === '') {
+		throw new UsageError(what);
+	}
+	return value;
 }
 
 /** Ask a yes/no question whose safe answer is no. Only reached behind `canAsk()`. */
@@ -868,13 +926,18 @@ export function printStatus(status: ClusterStatus): void {
 
 /** What the next step for a node pod is, as the command that takes it. */
 export function podStep(cloud: CloudShardsView, pod: CloudPod): string {
+	if (pod.joining === 'failed' && pod.next !== 'delete-pod') {
+		return `stopped joining: ${pod.joinError ?? 'see the audit log'}. Retry: snoutdata cluster retry ${pod.ref} --project ${cloud.ref}`;
+	}
 	switch (pod.next) {
 		case 'attach':
 			return `ready: snoutdata cluster nodes attach ${pod.ref} --project ${cloud.ref}`;
 		case 'delete-pod':
 			return `let go by the cluster: snoutdata cluster nodes remove ${pod.ref} --project ${cloud.ref} deletes its pod`;
 		case 'wait':
-			return `being made (${pod.state})`;
+			return `starting as a copy of the home node (${pod.state})`;
+		case 'joining':
+			return pod.joining === 'spreading' ? 'joining: taking its share of the data' : pod.joining === 'joining' ? 'joining the cluster' : `joining: starting as a copy of the home node (${pod.state})`;
 		default:
 			return pod.node ? `node ${pod.node.id}, ${pod.node.state}` : pod.state;
 	}
@@ -911,8 +974,19 @@ function printCloud(cloud: CloudShardsView, out: Out): void {
 	if (cloud.pods.length > 0) {
 		line(out, table([['  POD', 'STATE', 'NEXT'], ...cloud.pods.map((p) => [`  ${p.ref}`, p.state, podStep(cloud, p)])]));
 	}
+	if (cloud.router === 'starting') {
+		line(out, 'The router is starting beside the database, which takes about twenty seconds.');
+	} else if (cloud.router === 'paused') {
+		line(out, 'The project is paused; the router wakes with it on the next connection.');
+	}
 	if (cloud.routerError) {
-		line(out, `The router did not answer: ${cloud.routerError}`);
+		line(out, `The router is not answering: ${cloud.routerError}`);
+	}
+	const auto = cloud.automation;
+	if (auto && auto.queueError) {
+		line(out, `Stopped: ${auto.queueError}. Retry: snoutdata cluster retry --queue --project ${cloud.ref}`);
+	} else if (auto && (auto.queue.length > 0 || auto.queueJob !== null)) {
+		line(out, `Working through a request${auto.queueJob !== null ? ` (job ${auto.queueJob})` : ''}${auto.queue.length > 0 ? `; then ${auto.queue.join(', ')}` : ''}.`);
 	}
 	line(out);
 }

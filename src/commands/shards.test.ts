@@ -476,12 +476,29 @@ describe('shards --project: a SnoutData Cloud project, through cloud-project-sha
 		assert.throws(() => cloudOp('dissolve'), /cluster disable/);
 	});
 
+	test('a Cloud node joins on its own unless --no-join, and spread and retry are Cloud requests that ask first', async () => {
+		assert.deepEqual(cloudOp('nodes', 'add', '--no-join'), { body: { op: 'node.add', join: false }, destructive: false })
+		const { client, sent } = cloud({ spread: { queued: ['keyspace.create', 'table.distribute'], keyspace: 'account_id', next: 'public.orders is being spread over the cluster, one step at a time.' }, retry: { node: 'qrstvwxyzabcd', joining: true } });
+		await assert.rejects(run(['spread', 'public.orders', '--column', 'account_id', '--key-type', 'bigint', '--project', 'abcdefghjkmnp'], { client }), UsageError);
+		assert.deepEqual(sent, []);
+		assert.equal(await run(['spread', 'public.orders', '--column', 'account_id', '--key-type', 'bigint', '--project', 'abcdefghjkmnp', '--yes'], { client }), 0);
+		assert.deepEqual(sent, [{ ref: 'abcdefghjkmnp', action: 'spread', request: { table: 'public.orders', column: 'account_id', key_type: 'bigint' } }]);
+		await assert.rejects(run(['spread', 'public.orders', '--project', 'abcdefghjkmnp', '--yes'], { client }), UsageError);
+		await assert.rejects(run(['spread', 'public.orders', '--column', 'a', '--key-type', 'int', '--yes'], { client }), UsageError);
+		assert.equal(await run(['retry', 'qrstvwxyzabcd', '--project', 'abcdefghjkmnp'], { client }), 0);
+		assert.deepEqual(sent[1], { ref: 'abcdefghjkmnp', action: 'retry', node: 'qrstvwxyzabcd' });
+	});
+
 	test('status names the step each pod is waiting on, as the command that takes it', () => {
 		const view = {
 			ref: 'abcdefghjkmnp', sharded: true, projectsUsed: 2, maxProjects: 5, tier: 'pro', desiredNodes: 2, maxWritePauseMs: 2000, routerError: null,
 			pods: [{ ref: 'qrstvwxyzabcd', ordinal: 2, state: 'ready', desiredState: 'running', hasOwnBackup: false, standbyOf: 'abcdefghjkmnp', node: null, next: 'attach' as const }]
 		};
 		assert.equal(podStep(view, view.pods[0]!), 'ready: snoutdata cluster nodes attach qrstvwxyzabcd --project abcdefghjkmnp');
+		const joining = { ...view.pods[0]!, next: 'joining' as const, joining: 'spreading' as const };
+		assert.equal(podStep(view, joining), 'joining: taking its share of the data');
+		const stopped = { ...view.pods[0]!, next: 'attach' as const, joining: 'failed' as const, joinError: 'no room' };
+		assert.equal(podStep(view, stopped), 'stopped joining: no room. Retry: snoutdata cluster retry qrstvwxyzabcd --project abcdefghjkmnp');
 	});
 
 	test('each node uses a project slot: offered while one is spare, said beside the count', () => {
