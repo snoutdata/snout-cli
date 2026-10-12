@@ -79,6 +79,7 @@ export interface McpOperations {
 	 * passwords, arrived at from the other direction.
 	 */
 	listFunctionSecrets(ref: string): Promise<unknown>;
+	functionLogs(ref: string, options: { name?: string; errorsOnly?: boolean; limit?: number }): Promise<unknown>;
 	listTokens(): Promise<unknown>;
 	/** One project whole: the list row plus products, function and secret names, domains. */
 	getProject(ref: string): Promise<unknown>;
@@ -356,6 +357,14 @@ export const TOOLS: readonly ToolDefinition[] = [
 		inputSchema: object({ ref: STRING }, ['ref'])
 	},
 	{
+		name: 'function_logs',
+		description: "What a project's functions printed with console.log and console.error in the last seven days, newest first: each line's time, function, level ('error' for console.error and console.warn) and text. Lines arrive about a minute after they are printed. Use it after deploying or calling a function to see why it failed. name narrows to one function, errorsOnly to errors, limit is at most 500 (default 100). Costs nothing.",
+		inputSchema: object(
+			{ ref: STRING, name: STRING, errorsOnly: { type: 'boolean' }, limit: { type: 'integer' } },
+			['ref']
+		)
+	},
+	{
 		name: 'get_project',
 		description: 'Everything about one project in one call: its state, region and size, which products are on (auth, storage, data-api), the names of its deployed functions and function secrets, and its custom domains. Never a password, a key or a download link (export_status has the link to the last export).',
 		inputSchema: object({ ref: STRING }, ['ref'])
@@ -455,7 +464,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 /** The tools that only read. Every other one changes something, and says so to the client. */
 const READ_ONLY_TOOLS = new Set([
 	'whoami', 'list_projects', 'get_connection_url', 'usage', 'export_status', 'list_teams', 'list_tokens',
-	'list_functions', 'list_function_secrets', 'get_project', 'list_products', 'list_domains', 'restore_window',
+	'list_functions', 'list_function_secrets', 'function_logs', 'get_project', 'list_products', 'list_domains', 'restore_window',
 	'cluster_status', 'cluster_advice', 'cluster_plan', 'cluster_jobs', 'cluster_watch_job'
 ]);
 const DESTRUCTIVE_TOOLS = new Set(['delete_project', 'delete_function', 'reset_password', 'revoke_token', 'remove_domain', 'cluster_run']);
@@ -1026,6 +1035,14 @@ async function callTool(
 					return said(id, 'list_function_secrets needs a project ref.', true);
 				}
 				return said(id, await operations.listFunctionSecrets(ref));
+			}
+			case 'function_logs': {
+				const ref = stringArg(args, 'ref');
+				if (!ref) {
+					return said(id, 'function_logs needs a project ref.', true);
+				}
+				const limit = typeof args.limit === 'number' ? args.limit : undefined;
+				return said(id, await operations.functionLogs(ref, { name: stringArg(args, 'name') ?? undefined, errorsOnly: args.errorsOnly === true, limit }));
 			}
 			case 'list_tokens':
 				return said(id, await operations.listTokens());

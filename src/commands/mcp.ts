@@ -134,6 +134,14 @@ function operations(): McpOperations {
 			const stack = local(ref);
 			return stack ? localSecretNames(stack) : api.call('cloud-project-secrets', { ref });
 		},
+		functionLogs: (ref, options) =>
+			api.call('cloud-project-functions', {
+				ref,
+				action: 'logs',
+				...(options.name ? { name: options.name } : {}),
+				...(options.errorsOnly ? { errorsOnly: true } : {}),
+				...(options.limit ? { limit: options.limit } : {})
+			}),
 		listTokens: () => api.call('cloud-token-list', {}),
 		createToken: (name, expiresInDays, project) =>
 			api.call('cloud-token-create', {

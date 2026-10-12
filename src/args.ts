@@ -72,6 +72,8 @@ const VALUED = new Set([
 	// plan (sql/100). Memory per worker in MB, and how many workers it may run at once.
 	'memory',
 	'concurrency',
+	// `functions logs --tail 200`: how many of the newest lines to show, as `docker logs` says it.
+	'tail',
 	// `auth google --client-id`, `auth redirects --site-url --allow a,b`.
 	'client-id',
 	'site-url',
@@ -199,6 +201,9 @@ const KNOWN_BOOLEANS = new Set([
 	'no-verify-jwt',
 	// `functions size <name> --reset`: back to the plan's default size.
 	'reset',
+	// `functions logs --errors --follow`: console.error lines only; keep printing new ones.
+	'errors',
+	'follow',
 	// `secrets set NAME --stdin`: the value from a pipe rather than from the shell's
 	// history and `ps`. What a CI job should use.
 	'stdin',

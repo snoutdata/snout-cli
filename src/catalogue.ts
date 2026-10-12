@@ -50,6 +50,7 @@ export const COMMANDS = [
 	{ name: 'functions deploy', args: '<name>', summary: 'Put a folder of TypeScript on the edge', flags: ['--ref', '--dir', '--entrypoint', '--no-verify-jwt'] },
 	{ name: 'functions list', summary: 'What this project has deployed', flags: ['--ref'] },
 	{ name: 'functions size', args: '<name>', summary: 'Its memory and workers, within the plan', flags: ['--ref', '--memory', '--concurrency', '--reset'] },
+	{ name: 'functions logs', args: '[name]', summary: 'What your functions printed, the last seven days', flags: ['--ref', '--errors', '--tail', '--follow'] },
 	{ name: 'functions delete', args: '<name>', summary: 'Remove one', flags: ['--ref'] },
 	{ name: 'secrets set', summary: 'Set the environment functions run with', flags: ['--ref', '--stdin'] },
 	{ name: 'secrets list', summary: 'The names, never the values', flags: ['--ref'] },
@@ -122,6 +123,9 @@ export const COMMANDS = [
  */
 const FLAG_HELP: Record<string, string> = {
 	'--ref': 'The project. Defaults to SNOUTDATA_PROJECT, then .snoutdata/project.json here or in a parent',
+	'functions logs --errors': 'Only what was printed with console.error or console.warn, and the errors that stopped a request',
+	'functions logs --tail': 'How many of the newest lines to show. Defaults to 100, at most 500',
+	'functions logs --follow': 'Keep printing new lines as they arrive, about a minute after they are printed',
 	'--name': 'The project\'s name',
 	'tokens create --name': 'What the token is for and where it lives, shown in tokens list',
 	'db restore --name': 'The name of the new project the restore makes',

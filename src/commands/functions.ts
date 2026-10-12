@@ -334,6 +334,69 @@ export async function list(ref: string): Promise<void> {
 	});
 }
 
+/** One line a function printed, as `cloud-project-functions`' `logs` action returns it. */
+export interface FunctionLogLine {
+	id: number;
+	name: string;
+	level: 'log' | 'error';
+	message: string;
+	cut_bytes: number | null;
+	dropped_before: number;
+	at: string;
+}
+
+/** A line as a terminal shows it: time, function, then what it printed. */
+export function formatLogLine(line: FunctionLogLine): string {
+	const before = line.dropped_before > 0 ? dim(`(${line.dropped_before} earlier line(s) were printed too fast to keep) `) : '';
+	const cut = line.cut_bytes ? dim(` (cut from ${line.cut_bytes} bytes)`) : '';
+	const level = line.level === 'error' ? bold('error ') : '';
+	return `${dim(line.at)} ${line.name} ${level}${before}${line.message}${cut}`;
+}
+
+/**
+ * What the project's functions printed, oldest first, from the last seven days. `--follow` keeps
+ * asking every five seconds for lines newer than the last one shown; lines reach the control
+ * plane about a minute after they are printed, so a follow is never instant.
+ */
+export async function logs(
+	ref: string,
+	name: string | undefined,
+	options: { errorsOnly?: boolean; limit?: number; follow?: boolean }
+): Promise<void> {
+	const ask = (since?: string) =>
+		call<{ lines?: FunctionLogLine[] }>('cloud-project-functions', {
+			ref,
+			action: 'logs',
+			...(name ? { name } : {}),
+			...(options.errorsOnly ? { errorsOnly: true } : {}),
+			...(since ? { since } : {}),
+			limit: options.limit ?? 100
+		});
+	const first = ((await ask()).lines ?? []).slice().reverse();
+	emit({ ref, lines: first }, () => {
+		if (first.length === 0 && !options.follow) {
+			say(`Nothing printed${name ? ` by ${name}` : ''} on ${ref} in the last seven days.`);
+			say(dim('  Lines show up about a minute after a function prints them.'));
+			return;
+		}
+		for (const line of first) {
+			process.stdout.write(`${formatLogLine(line)}\n`);
+		}
+	});
+	if (!options.follow) {
+		return;
+	}
+	let newest = first.at(-1)?.at ?? new Date().toISOString();
+	for (;;) {
+		await new Promise((resolve) => setTimeout(resolve, 5_000));
+		const more = ((await ask(newest)).lines ?? []).slice().reverse();
+		for (const line of more) {
+			process.stdout.write(`${formatLogLine(line)}\n`);
+			newest = line.at;
+		}
+	}
+}
+
 export async function remove(ref: string, name: string): Promise<void> {
 	const answer = await runRemove(ref, name);
 	emit(answer, () => {

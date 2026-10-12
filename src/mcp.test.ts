@@ -25,6 +25,7 @@ function operations(over: Partial<McpOperations> = {}): McpOperations {
 		deleteFunction: async (ref, name) => ({ ref, removed: name }),
 		sizeFunction: async (ref, name, options) => ({ ref, sized: name, ...options }),
 		listFunctionSecrets: async (ref) => ({ ref, secrets: [{ name: 'STRIPE_KEY', bytes: 40 }] }),
+		functionLogs: async (ref) => ({ ref, lines: [] }),
 		listTokens: async () => ({ tokens: [{ id: 'tok_1', name: 'ci', prefix: 'sdt_abc' }] }),
 		createToken: async (name) => ({ token: 'sdt_secret', name }),
 		revokeToken: async (id) => ({ id, revoked: true }),

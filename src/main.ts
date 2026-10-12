@@ -124,6 +124,8 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata functions list [--ref R]
   snoutdata functions size <name> [--memory MB] [--concurrency N] [--reset]
                                            its memory and workers, within the plan
+  snoutdata functions logs [name] [--errors] [--tail N] [--follow]
+                                           what your functions printed, last 7 days
   snoutdata functions delete <name>
 
   snoutdata secrets set NAME=value [...]   the environment functions run with
@@ -504,6 +506,13 @@ async function run(args: ParsedArgs): Promise<number> {
 					});
 					return 0;
 				}
+				case 'logs':
+					await functions.logs(ref(), rest[0], {
+						errorsOnly: flagBoolean(args, 'errors'),
+						limit: flagNumber(args, 'tail'),
+						follow: flagBoolean(args, 'follow')
+					});
+					return 0;
 				case 'delete':
 				case 'remove': {
 					const name = rest[0];
