@@ -56,7 +56,7 @@ export interface RealtimeInspect {
 
 export interface RealtimeEvent {
 	at: number;
-	kind: 'connect' | 'connect_refused' | 'join' | 'join_refused' | 'leave' | 'channel_closed' | 'disconnect';
+	kind: 'connect' | 'connect_refused' | 'join' | 'join_refused' | 'leave' | 'channel_closed' | 'disconnect' | 'handler_failed';
 	socket?: number;
 	channel?: string;
 	presence_key?: string;
@@ -126,7 +126,8 @@ const KIND_WORDS: Record<RealtimeEvent['kind'], string> = {
 	join_refused: 'join refused',
 	leave: 'left',
 	channel_closed: 'channel closed by the server',
-	disconnect: 'disconnected'
+	disconnect: 'disconnected',
+	handler_failed: 'handler failed'
 };
 
 /** One event as a line a person reads. */
