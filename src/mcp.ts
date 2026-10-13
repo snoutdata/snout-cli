@@ -80,6 +80,16 @@ export interface McpOperations {
 	 */
 	listFunctionSecrets(ref: string): Promise<unknown>;
 	functionLogs(ref: string, options: { name?: string; errorsOnly?: boolean; limit?: number }): Promise<unknown>;
+	/**
+	 * Snout Containers. **No registry token here either**, for the reason `listFunctionSecrets`
+	 * gives: a private image's first deploy is a person's (`snoutdata containers deploy … --stdin`),
+	 * and a redeploy reuses the stored login.
+	 */
+	listContainers(ref: string): Promise<unknown>;
+	deployContainer(ref: string, name: string, options: { image: string; port?: number }): Promise<unknown>;
+	restartContainer(ref: string, name: string): Promise<unknown>;
+	deleteContainer(ref: string, name: string): Promise<unknown>;
+	containerLogs(ref: string, options: { name?: string; errorsOnly?: boolean; limit?: number }): Promise<unknown>;
 	listTokens(): Promise<unknown>;
 	/** One project whole: the list row plus products, function and secret names, domains. */
 	getProject(ref: string): Promise<unknown>;
@@ -350,6 +360,31 @@ export const TOOLS: readonly ToolDefinition[] = [
 		name: 'delete_function',
 		description: 'Remove one function from a project. It stops answering within a few seconds. It does not touch the database.',
 		inputSchema: object({ ref: STRING, name: STRING }, ['ref', 'name'])
+	},
+	{
+		name: 'list_containers',
+		description: "The project's Snout Containers: each one's status (pending, pulling, starting, running, restarting, failed, stopped), why when it is not running, its image and pinned digest, restarts, and its public URL. allowed=false means the plan no longer covers it and it is stopped. Also the plan's allowance. Costs nothing.",
+		inputSchema: object({ ref: STRING }, ['ref'])
+	},
+	{
+		name: 'deploy_container',
+		description: "Run a Docker image all the time beside the project, at https://<ref>.api.snoutdata.com/containers/v1/<name>/ (no API key needed there: the container authenticates its own callers). The image tag is pinned to the digest it points at now and must include linux/arm64. It listens on PORT (port, default 8080) and gets DATABASE_URL and the project's secrets in its environment. STATELESS: anything written inside it is lost on every restart or redeploy, so state belongs in the database. Plus and Pro plans only. A private image needs a person's first deploy with the CLI (no tool takes a registry token); a redeploy reuses the stored login. Returns at once: poll list_containers until the status is running or failed.",
+		inputSchema: object({ ref: STRING, name: STRING, image: STRING, port: { type: 'integer' } }, ['ref', 'name', 'image'])
+	},
+	{
+		name: 'restart_container',
+		description: 'Start one container again from its image. Everything written inside it is lost, which is also how to clear a container stuck in a bad state. Poll list_containers to see it come back.',
+		inputSchema: object({ ref: STRING, name: STRING }, ['ref', 'name'])
+	},
+	{
+		name: 'delete_container',
+		description: 'Stop one container and remove it from the project. It does not touch the database.',
+		inputSchema: object({ ref: STRING, name: STRING }, ['ref', 'name'])
+	},
+	{
+		name: 'container_logs',
+		description: "What a project's containers printed to stdout and stderr in the last seven days, newest first: each line's time, container, stream and text. Lines arrive about a minute after they are printed. Use it when list_containers says failed or restarting. name narrows to one container, errorsOnly to stderr, limit is at most 500 (default 100). Costs nothing.",
+		inputSchema: object({ ref: STRING, name: STRING, errorsOnly: { type: 'boolean' }, limit: { type: 'integer' } }, ['ref'])
 	},
 	{
 		name: 'list_function_secrets',
@@ -1028,6 +1063,45 @@ async function callTool(
 					return said(id, 'delete_function needs a project ref and a function name.', true);
 				}
 				return said(id, await operations.deleteFunction(ref, functionName));
+			}
+			case 'list_containers': {
+				const ref = stringArg(args, 'ref');
+				if (!ref) {
+					return said(id, 'list_containers needs a project ref.', true);
+				}
+				return said(id, await operations.listContainers(ref));
+			}
+			case 'deploy_container': {
+				const ref = stringArg(args, 'ref');
+				const containerName = stringArg(args, 'name');
+				const image = stringArg(args, 'image');
+				if (!ref || !containerName || !image) {
+					return said(id, 'deploy_container needs a project ref, a container name and an image.', true);
+				}
+				const port = typeof args.port === 'number' ? args.port : undefined;
+				return said(id, await operations.deployContainer(ref, containerName, { image, ...(port === undefined ? {} : { port }) }));
+			}
+			case 'restart_container':
+			case 'delete_container': {
+				const ref = stringArg(args, 'ref');
+				const containerName = stringArg(args, 'name');
+				if (!ref || !containerName) {
+					return said(id, `${name} needs a project ref and a container name.`, true);
+				}
+				return said(
+					id,
+					name === 'restart_container'
+						? await operations.restartContainer(ref, containerName)
+						: await operations.deleteContainer(ref, containerName)
+				);
+			}
+			case 'container_logs': {
+				const ref = stringArg(args, 'ref');
+				if (!ref) {
+					return said(id, 'container_logs needs a project ref.', true);
+				}
+				const limit = typeof args.limit === 'number' ? args.limit : undefined;
+				return said(id, await operations.containerLogs(ref, { name: stringArg(args, 'name') ?? undefined, errorsOnly: args.errorsOnly === true, limit }));
 			}
 			case 'list_function_secrets': {
 				const ref = stringArg(args, 'ref');

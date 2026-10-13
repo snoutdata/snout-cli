@@ -48,6 +48,7 @@ import { TOOLS, handle, takeMessages, type McpOperations, type McpOptions, type 
 import * as desktop from '../desktop.js';
 import { runPush } from './push.js';
 import { runDeploy, runList, runRemove, runSize } from './functions.js';
+import * as containers from './containers.js';
 import { localFunctions, localSecretNames, runLocalDeploy, runLocalRemove } from './stackFunctions.js';
 import { readStack, studioProjects } from '../local.js';
 import { shardsClient, type ShardsClient } from '../shardsClient.js';
@@ -142,6 +143,12 @@ function operations(): McpOperations {
 				...(options.errorsOnly ? { errorsOnly: true } : {}),
 				...(options.limit ? { limit: options.limit } : {})
 			}),
+		// Snout Containers: cloud only, the result-returning halves (stdout is the wire here).
+		listContainers: (ref) => containers.runList(ref),
+		deployContainer: (ref, name, options) => containers.runDeploy(ref, name, options),
+		restartContainer: (ref, name) => containers.runRestart(ref, name),
+		deleteContainer: (ref, name) => containers.runRemove(ref, name),
+		containerLogs: (ref, options) => containers.runLogs(ref, options),
 		listTokens: () => api.call('cloud-token-list', {}),
 		createToken: (name, expiresInDays, project) =>
 			api.call('cloud-token-create', {

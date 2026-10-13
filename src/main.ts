@@ -30,6 +30,7 @@ import * as projects from './commands/projects.js';
 import * as tokens from './commands/tokens.js';
 import * as keys from './commands/keys.js';
 import * as functions from './commands/functions.js';
+import * as containers from './commands/containers.js';
 import * as secrets from './commands/secrets.js';
 import * as db from './commands/db.js';
 import { accessCommand } from './commands/dbAccess.js';
@@ -128,7 +129,14 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
                                            what your functions printed, last 7 days
   snoutdata functions delete <name>
 
-  snoutdata secrets set NAME=value [...]   the environment functions run with
+  snoutdata containers deploy <name> <image> [--port 8080] [--registry-user U --stdin]
+                                           a Docker image of yours, running all the time
+  snoutdata containers list                status, image and URL of each
+  snoutdata containers logs [name] [--errors] [--tail N] [--follow]
+  snoutdata containers restart <name>
+  snoutdata containers delete <name>
+
+  snoutdata secrets set NAME=value [...]   the environment functions and containers run with
   snoutdata secrets set NAME --stdin       the value from a pipe, not from history
   snoutdata secrets list                   names and sizes; values are never readable
   snoutdata secrets unset NAME
@@ -524,6 +532,59 @@ async function run(args: ParsedArgs): Promise<number> {
 				}
 				default:
 					throw new UsageError(`unknown command: functions ${action}`);
+			}
+		}
+		case 'containers': {
+			// Cloud only: a local stack has no container runtime of ours.
+			switch (action) {
+				case 'deploy': {
+					const name = rest[0];
+					const image = rest[1];
+					if (!name || !image) {
+						throw new UsageError('containers deploy needs a name and an image: snoutdata containers deploy <name> <image>');
+					}
+					const registryUser = flagString(args, 'registry-user');
+					if (registryUser && !flagBoolean(args, 'stdin')) {
+						throw new UsageError('a registry login takes its token on stdin: echo "$TOKEN" | snoutdata containers deploy <name> <image> --registry-user U --stdin');
+					}
+					await containers.deploy(ref(), name, {
+						image,
+						port: flagNumber(args, 'port'),
+						registryUser,
+						registryPassword: registryUser ? await secrets.readStdin() : undefined,
+						clearCredential: flagBoolean(args, 'clear-registry'),
+						wait: !flagBoolean(args, 'no-wait')
+					});
+					return 0;
+				}
+				case undefined:
+				case 'list':
+					await containers.list(ref());
+					return 0;
+				case 'logs':
+					await containers.logs(ref(), rest[0], {
+						errorsOnly: flagBoolean(args, 'errors'),
+						limit: flagNumber(args, 'tail'),
+						follow: flagBoolean(args, 'follow')
+					});
+					return 0;
+				case 'restart': {
+					if (!rest[0]) {
+						throw new UsageError('containers restart needs a name');
+					}
+					await containers.restart(ref(), rest[0]);
+					return 0;
+				}
+				case 'delete':
+				case 'remove': {
+					if (!rest[0]) {
+						throw new UsageError('containers delete needs a name');
+					}
+					await containers.remove(ref(), rest[0]);
+					return 0;
+				}
+				default:
+					throw new UsageError(`unknown command: containers ${action}`);
 			}
 		}
 		case 'secrets': {

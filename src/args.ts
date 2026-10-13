@@ -74,6 +74,9 @@ const VALUED = new Set([
 	'concurrency',
 	// `functions logs --tail 200`: how many of the newest lines to show, as `docker logs` says it.
 	'tail',
+	// `containers deploy <name> <image> --registry-user U --stdin`: a private registry's user
+	// name. Never its token, which comes on stdin so it is in neither the shell history nor `ps`.
+	'registry-user',
 	// `auth google --client-id`, `auth redirects --site-url --allow a,b`.
 	'client-id',
 	'site-url',
@@ -207,6 +210,8 @@ const KNOWN_BOOLEANS = new Set([
 	// `secrets set NAME --stdin`: the value from a pipe rather than from the shell's
 	// history and `ps`. What a CI job should use.
 	'stdin',
+	// `containers deploy --clear-registry`: forget a stored registry login (the image went public).
+	'clear-registry',
 	// `--quiet`: drop the commentary, keep the answer and keep the errors. Wired 2026-09-06;
 	// it parsed and did nothing before.
 	'quiet',
