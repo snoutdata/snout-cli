@@ -14,8 +14,8 @@
  *     `docker.io/library/nginx:latest` here too;
  *   - resolving a reference to a digest and checking it can run on the fleet (`linux/arm64`);
  *   - whether a plan may deploy one more, and the sentences for when it may not;
- *   - the names and port a host derives from a container, so the agent and the front door
- *     cannot disagree about them.
+ *   - the host port a container is published on, so the control plane and the front door cannot
+ *     disagree about it.
  */
 
 /** Lower case, so the name is the same in a URL, a container name and a unit name. */
@@ -47,27 +47,9 @@ export function containerHostPort(podPort: number, slot: number): number {
 export const DEFAULT_CONTAINER_PORT = 8080;
 
 /**
- * The podman name of a project's container. A project ref is lower-case letters and digits, so
- * the first hyphen after the prefix is unambiguous whatever the container is called.
+ * The runner's own network (the `containers` shared service), policed like the functions runtime's.
+ * Customer containers are not on it: each project has a network of its own, made by the runner.
  */
-export function containerRuntimeName(ref: string, name: string): string {
-	return `snoutct-${ref}-${name}`;
-}
-
-/**
- * The systemd slice that carries the container's memory, CPU and task limits.
- *
- * Named by SLOT, not by name: a hyphen in a slice name means "child of", so `-` inside a
- * container's name would nest slices nobody meant. A slot is a number and unique in a project.
- */
-export function containerSliceName(ref: string, slot: number): string {
-	return `snoutct-${ref}-s${slot}.slice`;
-}
-
-/** The label every container of ours carries, so the agent finds them and nothing else. */
-export const CONTAINER_LABEL = 'io.snoutdata.container';
-
-/** The network containers run on: policed like the functions runtime's (`egress.ts`). */
 export const CONTAINERS_NETWORK = 'snoutct';
 export const CONTAINERS_SUBNET = '10.94.0.0/24';
 export const CONTAINERS_GATEWAY = '10.94.0.1';
