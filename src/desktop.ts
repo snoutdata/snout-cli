@@ -32,7 +32,7 @@
  * could not**.
  */
 
-import { execFile } from 'node:child_process';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
@@ -177,124 +177,81 @@ const DIAL_MS = 1500;
 // ---------------------------------------------------------------------------
 
 /**
- * Whether the socket listening on `127.0.0.1:<port>` belongs to this user.
+ * Whether the listener on `127.0.0.1:<port>` holds the token, asked WITHOUT sending it.
  *
  * **The bearer in `mcp.json` is long-lived, and a loopback port is not per-user.** Another
- * account on the same machine can bind the port while the app is closed, so sending the
- * token to "whatever answers" hands it to them, and lets them answer `whoami` and
- * `/cli/token` as they like (audit 14-A). The app offers no way to prove it holds the
- * token without being sent it, so the proof here is the operating system's: the listener
- * must be a process of ours. The app binds exactly `127.0.0.1` (`mcpServer.ts` HOST), and
- * only one socket can hold that address and port, so "ours listens there" is the check.
+ * account on the same machine can bind the port while the app is closed, so sending the token
+ * to "whatever answers" hands it to them, and lets them answer `whoami` and `/cli/token` as
+ * they like (audit 14-A). So the app proves it first: this sends a fresh random nonce to
+ * `/cli/prove`, with no `Authorization` header, and the app answers with an HMAC of the nonce
+ * and the port, keyed by the token. Only a holder of the token can compute it; the nonce is new
+ * every time, so no answer can be recorded and replayed; and the port is inside the proof, so a
+ * listener here cannot relay the question to the app on another port and pass its answer off.
  *
- * Every failure to find out is a NO: the token is not sent, and the caller treats the app
- * as absent, which is the same outcome as it not running.
+ * Every failure to get the right answer is a NO: the token is not sent, and the caller treats
+ * the app as absent, which is the same outcome as it not running. An app too old to answer
+ * `/cli/prove` is refused the same way.
  */
-export type PeerCheck = (port: number) => Promise<boolean>;
+export type PeerCheck = (config: DesktopConfig) => Promise<boolean>;
 
-/** `/proc/net/tcp` (Linux): the uids of LISTEN sockets on exactly 127.0.0.1:<port>. */
-export function procNetListenerUids(table: string, port: number): number[] {
-	const want = `0100007F:${port.toString(16).toUpperCase().padStart(4, '0')}`;
-	const uids: number[] = [];
-	for (const line of table.split('\n').slice(1)) {
-		const cols = line.trim().split(/\s+/);
-		// sl, local_address, rem_address, st, tx:rx, tr:when, retrnsmt, uid, ...
-		if (cols.length > 7 && cols[1]?.toUpperCase() === want && cols[3] === '0A') {
-			uids.push(Number(cols[7]));
-		}
-	}
-	return uids;
+/** The proof's domain. Must match `STUDIO_PROOF_CONTEXT` in Studio's `mcpServer.ts`. */
+const PROOF_CONTEXT = 'snoutdata-studio-proof-v1';
+
+/** What the app must answer for this nonce, if it holds `token` and is listening on `port`. */
+export function expectedProof(token: string, port: number, nonce: string): string {
+	return createHmac('sha256', token).update(`${PROOF_CONTEXT}\n${port}\n${nonce}`).digest('base64url');
 }
 
-/** `lsof -F n` restricted to our uid (macOS): did any of our processes list the address. */
-export function lsofListsAddress(output: string, port: number): boolean {
-	return output.split('\n').some((line) => line.trim() === `n127.0.0.1:${port}`);
+function sameProof(a: string, b: string): boolean {
+	const ab = Buffer.from(a);
+	const bb = Buffer.from(b);
+	return ab.length === bb.length && timingSafeEqual(ab, bb);
 }
 
-function run(file: string, args: string[]): Promise<string> {
-	return new Promise((resolve) => {
-		execFile(file, args, { timeout: 5000, windowsHide: true }, (error, stdout) => {
-			// lsof exits 1 when it found nothing, which is an answer ("not ours"), not a fault.
-			resolve(error && !stdout ? '' : String(stdout));
-		});
-	});
-}
-
-/** The real check, per platform. Unknown platforms are a NO. */
-export async function listenerIsMine(port: number, platform: NodeJS.Platform = process.platform): Promise<boolean> {
-	if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+/** The real check: a challenge the app answers by holding the token, never by being sent it. */
+export async function appProvesToken(config: DesktopConfig): Promise<boolean> {
+	const port = config.port;
+	if (typeof port !== 'number' || !Number.isInteger(port) || port <= 0 || port > 65535 || !config.token) {
 		return false;
 	}
+	const nonce = randomBytes(32).toString('base64url');
 	try {
-		if (platform === 'linux') {
-			const uid = process.getuid?.();
-			if (uid === undefined) {
-				return false;
-			}
-			const uids = procNetListenerUids(readFileSync('/proc/net/tcp', 'utf8'), port);
-			return uids.length > 0 && uids.every((owner) => owner === uid);
+		const response = await fetch(`http://127.0.0.1:${port}/cli/prove?nonce=${nonce}`, {
+			// No credentials of any kind: this request is what decides whether they may be sent.
+			redirect: 'error',
+			signal: AbortSignal.timeout(DIAL_MS)
+		});
+		if (!response.ok) {
+			return false;
 		}
-		if (platform === 'darwin') {
-			const uid = process.getuid?.();
-			if (uid === undefined) {
-				return false;
-			}
-			// -a ANDs the selections: a LISTEN socket on exactly this address, held by a
-			// process of this uid. Another user's process is never listed.
-			const out = await run('/usr/sbin/lsof', ['-nP', '-a', `-iTCP@127.0.0.1:${port}`, '-sTCP:LISTEN', '-u', String(uid), '-Fn']);
-			return lsofListsAddress(out, port);
-		}
-		if (platform === 'win32') {
-			// The listener's owning process, and that process's owner, against ours. A process
-			// of another user answers GetOwner with access denied (ReturnValue 2), which is a NO.
-			const script = [
-				`$c = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort ${port} -State Listen -ErrorAction Stop | Select-Object -First 1`,
-				'$p = Get-CimInstance Win32_Process -Filter "ProcessId=$($c.OwningProcess)" -ErrorAction Stop',
-				'$o = Invoke-CimMethod -InputObject $p -MethodName GetOwner -ErrorAction Stop',
-				'$me = [Security.Principal.WindowsIdentity]::GetCurrent().Name',
-				'if ($o.ReturnValue -eq 0 -and ("$($o.Domain)\\$($o.User)" -ieq $me)) { "mine" } else { "other" }'
-			].join('; ');
-			const out = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]);
-			return out.trim() === 'mine';
-		}
+		const body = (await response.json()) as { proof?: unknown };
+		return typeof body.proof === 'string' && sameProof(body.proof, expectedProof(config.token, port, nonce));
 	} catch {
 		return false;
 	}
-	return false;
 }
 
-/** A yes is remembered briefly, so a run of tool calls does not ask the OS each time. */
-const VERIFIED_MS = 10_000;
-const verified = new Map<number, number>();
-
-async function verifyPeer(port: number, check: PeerCheck): Promise<boolean> {
-	const at = verified.get(port);
-	if (at !== undefined && Date.now() - at < VERIFIED_MS) {
-		return true;
-	}
-	const mine = await check(port).catch(() => false);
-	if (mine) {
-		verified.set(port, Date.now());
-	} else {
-		verified.delete(port);
-	}
-	return mine;
-}
-
-/** The one way a request carrying the app's bearer leaves this process. */
-async function dial(config: DesktopConfig, path: string, init: RequestInit, check: PeerCheck = listenerIsMine): Promise<Response> {
-	if (!(await verifyPeer(config.port as number, check))) {
+/**
+ * The one way a request carrying the app's bearer leaves this process.
+ *
+ * The proof is asked for on every request, not remembered: it is one loopback round trip, and
+ * remembering it would leave a window in which the app could exit and another listener take
+ * the port.
+ */
+async function dial(config: DesktopConfig, path: string, init: RequestInit, check: PeerCheck = appProvesToken): Promise<Response> {
+	if (!(await check(config).catch(() => false))) {
 		throw new PeerNotVerified(config.port as number);
 	}
 	return fetch(`http://127.0.0.1:${config.port}${path}`, {
 		...init,
+		redirect: 'error',
 		headers: { ...(init.headers as Record<string, string>), Authorization: `Bearer ${config.token}` }
 	});
 }
 
 export class PeerNotVerified extends Error {
 	constructor(port: number) {
-		super(`the process on 127.0.0.1:${port} is not one of this user's, so SnoutData Studio's token was not sent to it`);
+		super(`the process on 127.0.0.1:${port} did not prove it is SnoutData Studio, so Studio's token was not sent to it`);
 		this.name = 'PeerNotVerified';
 	}
 }
@@ -306,7 +263,7 @@ export class PeerNotVerified extends Error {
  * installed app that has not run since June leaves a file pointing at a port nothing is
  * listening on, and the dev app running right now is the second entry.
  */
-export async function look(config?: DesktopConfig | null, check: PeerCheck = listenerIsMine): Promise<DesktopLook> {
+export async function look(config?: DesktopConfig | null, check: PeerCheck = appProvesToken): Promise<DesktopLook> {
 	if (config !== undefined) {
 		return lookAt(config, check);
 	}
@@ -337,11 +294,6 @@ async function lookAt(config: DesktopConfig | null, check: PeerCheck): Promise<D
 		return { available: false, skip };
 	}
 	const settled = config as DesktopConfig;
-	if (!(await verifyPeer(settled.port as number, check))) {
-		// Nothing of ours is listening there: either the app is closed, or somebody else holds
-		// the port. Either way the token stays here.
-		return { available: false, skip: 'not-verified' };
-	}
 	let who: DesktopWho;
 	try {
 		const response = await dial(settled, '/cli/whoami', { signal: AbortSignal.timeout(DIAL_MS) }, check);
@@ -349,9 +301,13 @@ async function lookAt(config: DesktopConfig | null, check: PeerCheck): Promise<D
 			return { available: false, skip: 'not-running' };
 		}
 		who = (await response.json()) as DesktopWho;
-	} catch {
-		// A stale port from a previous launch answers nothing, which is the same outcome
-		// as the app never having run: there is nobody to ask.
+	} catch (error) {
+		if (error instanceof PeerNotVerified) {
+			// Nothing that holds the token is listening there: the app is closed, somebody else
+			// holds the port, or the app is too old to prove itself. Either way the token stayed here.
+			return { available: false, skip: 'not-verified' };
+		}
+		// The app proved itself and then did not answer: there is nobody to ask after all.
 		return { available: false, skip: 'not-running' };
 	}
 	if (!who.signedIn) {

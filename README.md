@@ -191,6 +191,11 @@ Studio if it is running here and willing, then a browser, then a pairing code fo
 terminal that has no browser at all. With no person present (not a terminal, `--json`, CI, or
 `SNOUTDATA_NO_INTERACTIVE`) nothing is asked and it exits 3 at once.
 
+Studio's local token is never sent to whatever answers on its port: the CLI first sends a random
+nonce, and only a listener that answers with an HMAC of it keyed by that token (which proves it
+holds the token without revealing it) is trusted. Anything else, including a Studio too old to
+answer, is skipped as if Studio were not running.
+
 ---
 
 ## Documentation
