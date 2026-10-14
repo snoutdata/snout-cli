@@ -1,6 +1,11 @@
 // GENERATED: a copy of SnoutData's shared code (typescriptTypes.ts).
 // Do not edit here: edits are overwritten by the build.
 /*---------------------------------------------------------------------------------------------
+ *  Copyright (c) 2026 SNOUTDATA INC. All rights reserved.
+ *  Licensed under the Apache License, Version 2.0. See LICENSE in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/*---------------------------------------------------------------------------------------------
  *  A database schema, as TypeScript. Ours, and for every driver.
  *
  *  A type generator needs two halves: plain SQL against the catalogue, and a generator for the
@@ -544,131 +549,58 @@ function constantsBlock(
 }
 
 /**
- * The helper types generated files for the v2 client API carry, verbatim, with the default
- * schema's NAME templated in.
+ * The lookup helpers, with the default schema's NAME templated in. Each takes either a name in
+ * the default schema, or `{ schema }` and then a name in that schema:
  *
- * Copied rather than reimplemented on purpose: this is the compatibility surface, and a
- * cleverer version of it that behaves a shade differently is exactly the kind of difference
- * that shows up in somebody's build and not in ours. `DatabaseWithoutInternals` is kept as a
- * name, the whole of `Database`, because the helpers below refer to it and so may a customer's
- * own code.
+ *     Tables<"posts">                         the Row of a table or a view
+ *     Tables<{ schema: "audit" }, "events">    the same, in another schema
+ *     TablesInsert<"posts">                    a table's Insert (a view has none)
+ *     TablesUpdate<"posts">                    a table's Update
+ *     Enums<"status">                          an enum's labels, as a union
+ *     CompositeTypes<"address">                a composite type
+ *
+ * They are built from four small pieces: `SchemaOf` and `NameOf` read the arguments, `Lookup`
+ * looks a name up in one section of a schema, and `Member` takes `Row`, `Insert` or `Update`
+ * out of the entry found. A name that is not there is `never`, and the constraints make it a
+ * compiler error at the use site.
  */
 function helperBlock(defaultSchema: string): string {
-	const s = lit(defaultSchema);
-	return `type DatabaseWithoutInternals = Database
+	return `type DefaultSchemaName = Extract<keyof Database, ${lit(defaultSchema)}>
 
-type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, ${s}>]
+type InSchema = { schema: keyof Database }
+
+type SchemaOf<Choice> = Choice extends InSchema ? Choice["schema"] : DefaultSchemaName
+
+type NameOf<Choice, Name> = Choice extends InSchema ? Name : Choice
+
+type Lookup<Section, Name> = Name extends keyof Section ? Section[Name] : never
+
+type Member<Entry, Part extends "Row" | "Insert" | "Update"> = Entry extends Record<Part, infer Value> ? Value : never
+
+type Relations<Schema extends keyof Database> = Database[Schema]["Tables"] & Database[Schema]["Views"]
 
 export type Tables<
-  DefaultSchemaTableNameOrOptions extends
-    | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
-    | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
-  }
-    ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
-        DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never = never,
-> = DefaultSchemaTableNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
-}
-  ? (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
-      DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])[TableName] extends {
-      Row: infer R
-    }
-    ? R
-    : never
-  : DefaultSchemaTableNameOrOptions extends keyof (DefaultSchema["Tables"] &
-        DefaultSchema["Views"])
-    ? (DefaultSchema["Tables"] &
-        DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
-        Row: infer R
-      }
-      ? R
-      : never
-    : never
+  Choice extends keyof Relations<DefaultSchemaName> | InSchema,
+  Name extends Choice extends InSchema ? keyof Relations<Choice["schema"]> : never = never,
+> = Member<Lookup<Relations<SchemaOf<Choice>>, NameOf<Choice, Name>>, "Row">
 
 export type TablesInsert<
-  DefaultSchemaTableNameOrOptions extends
-    | keyof DefaultSchema["Tables"]
-    | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
-  }
-    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
-> = DefaultSchemaTableNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
-}
-  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
-      Insert: infer I
-    }
-    ? I
-    : never
-  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
-    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
-        Insert: infer I
-      }
-      ? I
-      : never
-    : never
+  Choice extends keyof Database[DefaultSchemaName]["Tables"] | InSchema,
+  Name extends Choice extends InSchema ? keyof Database[Choice["schema"]]["Tables"] : never = never,
+> = Member<Lookup<Database[SchemaOf<Choice>]["Tables"], NameOf<Choice, Name>>, "Insert">
 
 export type TablesUpdate<
-  DefaultSchemaTableNameOrOptions extends
-    | keyof DefaultSchema["Tables"]
-    | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
-  }
-    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
-> = DefaultSchemaTableNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
-}
-  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
-      Update: infer U
-    }
-    ? U
-    : never
-  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
-    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
-        Update: infer U
-      }
-      ? U
-      : never
-    : never
+  Choice extends keyof Database[DefaultSchemaName]["Tables"] | InSchema,
+  Name extends Choice extends InSchema ? keyof Database[Choice["schema"]]["Tables"] : never = never,
+> = Member<Lookup<Database[SchemaOf<Choice>]["Tables"], NameOf<Choice, Name>>, "Update">
 
 export type Enums<
-  DefaultSchemaEnumNameOrOptions extends
-    | keyof DefaultSchema["Enums"]
-    | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends DefaultSchemaEnumNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
-  }
-    ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never = never,
-> = DefaultSchemaEnumNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
-}
-  ? DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"][EnumName]
-  : DefaultSchemaEnumNameOrOptions extends keyof DefaultSchema["Enums"]
-    ? DefaultSchema["Enums"][DefaultSchemaEnumNameOrOptions]
-    : never
+  Choice extends keyof Database[DefaultSchemaName]["Enums"] | InSchema,
+  Name extends Choice extends InSchema ? keyof Database[Choice["schema"]]["Enums"] : never = never,
+> = Lookup<Database[SchemaOf<Choice>]["Enums"], NameOf<Choice, Name>>
 
 export type CompositeTypes<
-  PublicCompositeTypeNameOrOptions extends
-    | keyof DefaultSchema["CompositeTypes"]
-    | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
-  }
-    ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never = never,
-> = PublicCompositeTypeNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
-}
-  ? DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"][CompositeTypeName]
-  : PublicCompositeTypeNameOrOptions extends keyof DefaultSchema["CompositeTypes"]
-    ? DefaultSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
-    : never`;
+  Choice extends keyof Database[DefaultSchemaName]["CompositeTypes"] | InSchema,
+  Name extends Choice extends InSchema ? keyof Database[Choice["schema"]]["CompositeTypes"] : never = never,
+> = Lookup<Database[SchemaOf<Choice>]["CompositeTypes"], NameOf<Choice, Name>>`;
 }
