@@ -12,9 +12,8 @@
  *  JSON it returns. We already have the
  *  introspection half — {@link DatabaseSchema}, filled by `src/server/src/drivers/*​/
  *  introspection.ts` for eleven backends — so the only thing missing was the generator, and
- *  this is it. The consequence is the part a Postgres-only
- *  generator cannot copy: the same command works against MySQL, SQL Server, Oracle, SQLite and the rest, because the
- *  schema model it reads was never Postgres-shaped.
+ *  this is it. The consequence: the same command works against MySQL, SQL Server, Oracle,
+ *  SQLite and the rest, because the schema model it reads was never Postgres-shaped.
  *
  *  ## Why this is beside `shared/engine/` rather than inside it
  *
@@ -32,16 +31,15 @@
  *
  *  ## What it emits
  *
- *  The shape the v2 client API's generics consume, verified against real generated files
- *  rather than remembered: `Json`, `Database` with one block per schema
- *  (`Tables`/`Views`/`Functions`/`Enums`/`CompositeTypes`), `Row`/`Insert`/`Update` per table,
- *  a `Relationships` array per relation, then the `Tables<>`/`TablesInsert<>`/`TablesUpdate<>`/
- *  `Enums<>`/`CompositeTypes<>` helpers and the `Constants` object. The point of matching it is
- *  that a customer's existing generated-types workflow keeps working when they point at us.
+ *  The `Database` type `@snoutdata/client`'s generics read: `Json`, `Database` with one block
+ *  per schema (`Tables`/`Views`/`Functions`/`Enums`/`CompositeTypes`), `Row`/`Insert`/`Update`
+ *  per table, a `Relationships` array per relation, then the `Tables<>`/`TablesInsert<>`/
+ *  `TablesUpdate<>`/`Enums<>`/`CompositeTypes<>` lookup helpers and the `Constants` object.
+ *  Those names are the file's public surface: customer code imports them, so they do not change.
  *
  *  Formatting is prettier's default for this file (two spaces, double quotes, no semicolons in
- *  type members, trailing commas in the emitted arrays) because that is what lands in their
- *  repository today and a reformat is a diff nobody asked for. We do not run prettier — the
+ *  type members, trailing commas in the emitted arrays), so a repository that runs prettier over
+ *  the generated file sees no diff. We do not run prettier — the
  *  layout is emitted directly, so it is stable without a dependency.
  *
  *  ## Three honest limits, each of which is a property of the introspection and not of this file
@@ -246,8 +244,8 @@ function optionalOnInsert(column: ColumnInfo): boolean {
 
 function columnLine(emitter: Emitter, column: ColumnInfo, level: number, optional: boolean, writing = false): string {
 	// A value the database refuses to be given (an `ALWAYS` identity, a computed column) is
-	// `never` in Insert and Update, as the official client's generated types write it, so the type stops the
-	// insert Postgres would refuse with "cannot insert a non-DEFAULT value".
+	// `never` in Insert and Update, so the type stops the insert Postgres would refuse with
+	// "cannot insert a non-DEFAULT value".
 	if (writing && column.generatedAlways === true) {
 		return `${pad(level)}${key(column.name)}?: never`;
 	}
@@ -517,8 +515,8 @@ export function emitTypeScriptTypes(schema: DatabaseSchema, options: TypeGenOpti
 
 /**
  * The `Constants` object: an enum's labels as values, for the code that needs the list at
- * runtime rather than at compile time. Every schema gets an entry, empty or not, which is what
- * the real one does.
+ * runtime rather than at compile time. Every schema gets an entry, empty or not, so
+ * `Constants.<schema>.Enums` exists for each of them.
  */
 function constantsBlock(
 	schemaNames: readonly string[],
