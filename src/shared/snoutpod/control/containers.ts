@@ -13,6 +13,8 @@
  *   - reading an image reference the way `docker pull` reads it, so `nginx` means
  *     `docker.io/library/nginx:latest` here too;
  *   - resolving a reference to a digest and checking it can run on the fleet (`linux/arm64`);
+ *   - how large that image is, and the cap on it (CT26);
+ *   - where the copy in our registry lives (CT25), and that nobody deploys from it by naming it;
  *   - whether a plan may deploy one more, and the sentences for when it may not;
  *   - the host port a container is published on, so the control plane and the front door cannot
  *     disagree about it.
@@ -185,7 +187,8 @@ export interface RegistryCredential {
 }
 
 export type ResolvedImage =
-	| { ok: true; digest: string; platforms: string[] }
+	/** `bytes`: what the linux/arm64 image is, compressed (its config and layers), as a host pulls it. */
+	| { ok: true; digest: string; platforms: string[]; bytes: number }
 	| { ok: false; reason: string };
 
 const MANIFEST_ACCEPT = [
@@ -298,7 +301,22 @@ interface ManifestDescriptor {
 interface ManifestBody {
 	mediaType?: string;
 	manifests?: ManifestDescriptor[];
-	config?: { digest?: string };
+	config?: { digest?: string; size?: number };
+	layers?: { size?: number }[];
+}
+
+/** What a single image's manifest says it weighs: the config and every layer, compressed. */
+function imageBytes(body: ManifestBody): number {
+	let total = Number(body.config?.size) || 0;
+	for (const layer of body.layers ?? []) {
+		total += Number(layer.size) || 0;
+	}
+	return total;
+}
+
+function runsOnFleet(platform: string): boolean {
+	const wanted = `${FLEET_PLATFORM.os}/${FLEET_PLATFORM.architecture}`;
+	return platform === wanted || platform.startsWith(`${wanted}/`);
 }
 
 function platformName(p: { os?: string; architecture?: string; variant?: string }): string {
@@ -344,24 +362,41 @@ export async function resolveImage(
 	if (response.status !== 200) {
 		return { ok: false, reason: `${ref.registry} answered ${response.status} for ${shown}.` };
 	}
-	const bytes = await response.arrayBuffer();
+	const raw = await response.arrayBuffer();
 	const headerDigest = response.headers.get('docker-content-digest');
-	const digest = headerDigest && isDigest(headerDigest) ? headerDigest : `sha256:${await sha256Hex(bytes)}`;
+	const digest = headerDigest && isDigest(headerDigest) ? headerDigest : `sha256:${await sha256Hex(raw)}`;
 	if (ref.digest && digest !== ref.digest) {
 		return { ok: false, reason: `${ref.registry} served ${digest} for ${shown}, which is not the digest asked for.` };
 	}
 	let body: ManifestBody;
 	try {
-		body = JSON.parse(new TextDecoder().decode(bytes)) as ManifestBody;
+		body = JSON.parse(new TextDecoder().decode(raw)) as ManifestBody;
 	} catch {
 		return { ok: false, reason: `${ref.registry} sent a manifest for ${shown} that is not JSON.` };
 	}
 
 	let platforms: string[] = [];
+	let bytes = imageBytes(body);
 	if (Array.isArray(body.manifests)) {
-		platforms = body.manifests
-			.filter((m) => m.platform && m.platform.architecture !== 'unknown')
-			.map((m) => platformName(m.platform ?? {}));
+		const listed = body.manifests.filter((m) => m.platform && m.platform.architecture !== 'unknown');
+		platforms = listed.map((m) => platformName(m.platform ?? {}));
+		// The one image a host pulls out of the index, for its size: the cap is on what we store and
+		// pull (CT26), and the other platforms are never copied.
+		const ours = listed.find((m) => runsOnFleet(platformName(m.platform ?? {})));
+		if (ours) {
+			if (!ours.digest || !isDigest(ours.digest)) {
+				return { ok: false, reason: `the linux/arm64 entry of ${shown} has no digest.` };
+			}
+			const child = await client.get(`manifests/${ours.digest}`, MANIFEST_ACCEPT);
+			if (child.status !== 200) {
+				return { ok: false, reason: `${ref.registry} would not serve the linux/arm64 image of ${shown} (${child.status}).` };
+			}
+			try {
+				bytes = imageBytes(JSON.parse(await child.text()) as ManifestBody);
+			} catch {
+				return { ok: false, reason: `the linux/arm64 image of ${shown} has a manifest that is not JSON.` };
+			}
+		}
 	} else if (body.config?.digest) {
 		const config = await client.get(`blobs/${body.config.digest}`, '*/*');
 		if (config.status !== 200) {
@@ -374,8 +409,7 @@ export async function resolveImage(
 			return { ok: false, reason: `the configuration of ${shown} is not JSON.` };
 		}
 	}
-	const runs = platforms.some((p) => p === `${FLEET_PLATFORM.os}/${FLEET_PLATFORM.architecture}` || p.startsWith(`${FLEET_PLATFORM.os}/${FLEET_PLATFORM.architecture}/`));
-	if (!runs) {
+	if (!platforms.some(runsOnFleet)) {
 		return {
 			ok: false,
 			reason:
@@ -383,7 +417,51 @@ export async function resolveImage(
 				`Build it for arm64 too: docker buildx build --platform linux/amd64,linux/arm64 --push .`
 		};
 	}
-	return { ok: true, digest, platforms };
+	return { ok: true, digest, platforms, bytes };
+}
+
+/**
+ * The most a container's image may weigh, compressed, as its linux/arm64 image (CT26). It is stored
+ * in our registry for as long as the container exists and unpacked on the host's disk beside every
+ * other project's, so it has a ceiling; 1 GB holds a Node, Python, Go or JVM service with room to
+ * spare, and is $0.10 a month of registry at most.
+ */
+export const MAX_IMAGE_BYTES = 1024 ** 3;
+
+/** Null when the image fits; the sentence the CLI prints when it does not. */
+export function imageSizeRefusal(image: string, bytes: number): string | null {
+	if (bytes <= MAX_IMAGE_BYTES) {
+		return null;
+	}
+	const size = (n: number) => `${Math.round((n / 1024 ** 3) * 10) / 10} GB`;
+	return `${image} is ${size(bytes)} compressed, and a container's image may be at most ${size(MAX_IMAGE_BYTES)}. A slimmer base (alpine, distroless, -slim) usually fixes it.`;
+}
+
+// ------------------------------------------------------------------------------
+// The copy in our registry (CT25)
+// ------------------------------------------------------------------------------
+
+/**
+ * Where a project's images are copied, below the fleet's registry: one repository per project, so
+ * a credential can be scoped to it. It lives in the fleet account, whose names never contain "snout".
+ */
+export const COPY_REPOSITORY_PREFIX = 's-fleet/ct';
+
+/** `s-fleet/ct/<ref>`: the repository a project's copies and pushed images live in. */
+export function copyRepositoryPath(ref: string): string {
+	if (!/^[a-z][a-z0-9]{12}$/.test(ref)) {
+		throw new Error(`not a project ref: ${JSON.stringify(ref)}`);
+	}
+	return `${COPY_REPOSITORY_PREFIX}/${ref}`;
+}
+
+/**
+ * True for an image in one of OUR repositories, whatever registry is named. A deploy may not name
+ * one: they hold every project's copies, and the only way in is `deploy --dockerfile`, which pushes
+ * to the project's own with a credential scoped to it.
+ */
+export function isFleetRepository(ref: ImageReference): boolean {
+	return ref.repository === 's-fleet' || ref.repository.startsWith('s-fleet/');
 }
 
 // ------------------------------------------------------------------------------

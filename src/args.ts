@@ -77,6 +77,9 @@ const VALUED = new Set([
 	// `containers deploy <name> <image> --registry-user U --stdin`: a private registry's user
 	// name. Never its token, which comes on stdin so it is in neither the shell history nor `ps`.
 	'registry-user',
+	// `containers deploy <name> --dockerfile ./app`: build that folder (or that Dockerfile) with the
+	// local Docker and push it to the project's own repository instead of naming an image.
+	'dockerfile',
 	// `auth google --client-id`, `auth redirects --site-url --allow a,b`.
 	'client-id',
 	'site-url',
