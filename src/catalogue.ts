@@ -132,7 +132,7 @@ const FLAG_HELP: Record<string, string> = {
 	'functions logs --tail': 'How many of the newest lines to show. Defaults to 100, at most 500',
 	'functions logs --follow': 'Keep printing new lines as they arrive, about a minute after they are printed',
 	'containers deploy --port': 'The port the container listens on, also given to it as PORT (default 8080)',
-	'containers deploy --dockerfile': 'A folder with a Dockerfile (or the Dockerfile): built for linux/arm64 with your Docker and pushed to the project\'s own repository',
+	'containers deploy --dockerfile': 'A folder with a Dockerfile (or the Dockerfile): built for linux/arm64 with your Docker and uploaded to the project',
 	'containers deploy --registry-user': 'The user name for a private registry. The token comes on stdin, with --stdin',
 	'containers deploy --stdin': 'Read the registry token from a pipe, so it is not in shell history or ps',
 	'containers deploy --clear-registry': 'Forget the stored registry login, for an image that is public now',
