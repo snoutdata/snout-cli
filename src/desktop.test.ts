@@ -13,7 +13,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { configPath, configPaths, listenerIsMine, look, lsofListsAddress, offerFromConfig, procNetListenerUids, readDesktopConfig } from './desktop.js';
+import { appProvesToken, configPath, configPaths, expectedProof, look, offerFromConfig, readDesktopConfig } from './desktop.js';
 
 test('the config is looked for where Electron actually puts it', () => {
 	const win = configPath('win32', { APPDATA: 'C:\\Users\\joel\\AppData\\Roaming' });
@@ -92,59 +92,84 @@ test('an explicit override replaces both, for a layout neither predicts', () => 
 	assert.deepEqual(configPaths('darwin', { SNOUTDATA_DESKTOP_CONFIG: '/tmp/x.json' }), ['/tmp/x.json']);
 });
 
-test('/proc/net/tcp is read for LISTEN sockets on exactly 127.0.0.1 and the port', () => {
-	const table = [
-		'  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode',
-		'   0: 0100007F:1C8F 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 1 1 0000000000000000 100 0 0 10 0',
-		'   1: 00000000:1C8F 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1002        0 2 1 0000000000000000 100 0 0 10 0',
-		'   2: 0100007F:1C8F 0100007F:D431 01 00000000:00000000 00:00000000 00000000  1003        0 3 1 0000000000000000 100 0 0 10 0',
-		'   3: 0100007F:1C90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1004        0 4 1 0000000000000000 100 0 0 10 0'
-	].join('\n');
-	assert.deepEqual(procNetListenerUids(table, 7311), [1001]);
-	assert.deepEqual(procNetListenerUids(table, 7312), [1004]);
-	assert.deepEqual(procNetListenerUids(table, 7313), []);
+test('the expected proof is the one SnoutData Studio computes', () => {
+	// Studio's mcpServer.test.ts asserts this same vector for its studioProof: the two must never drift.
+	assert.equal(expectedProof('test-secret-token', 7311, 'AAAAAAAAAAAAAAAAAAAAAA'), 'GhKfaBXRUv0iN811Y6NjA9tGjTZCFWneI9qZAam1-s4');
 });
 
-test('lsof output counts only a listener on exactly 127.0.0.1 and the port', () => {
-	assert.equal(lsofListsAddress('p1\nf12\nn127.0.0.1:7311\n', 7311), true);
-	assert.equal(lsofListsAddress('p1\nf12\nn*:7311\n', 7311), false);
-	assert.equal(lsofListsAddress('p1\nf12\nn127.0.0.1:73110\n', 7311), false);
-	assert.equal(lsofListsAddress('', 7311), false);
-});
-
-/** A stand-in for whatever holds the port, recording what it was sent. */
-async function listener(): Promise<{ port: number; auths: (string | undefined)[]; close: () => void }> {
+/**
+ * A stand-in for whatever holds the port, recording the Authorization header of every request.
+ * `prove` decides what it answers on /cli/prove: the right proof (it holds the token), a proof
+ * made for another port (a relay of the real app), or nothing useful (it does not hold the token).
+ */
+async function listener(prove: (port: number, nonce: string) => unknown): Promise<{ port: number; auths: (string | undefined)[]; close: () => void }> {
 	const auths: (string | undefined)[] = [];
+	let port = 0;
 	const server = createServer((req, res) => {
 		auths.push(req.headers.authorization);
+		const url = new URL(req.url ?? '/', 'http://127.0.0.1');
 		res.writeHead(200, { 'content-type': 'application/json' });
+		if (url.pathname === '/cli/prove') {
+			res.end(JSON.stringify({ ok: true, proof: prove(port, url.searchParams.get('nonce') ?? '') }));
+			return;
+		}
 		res.end(JSON.stringify({ signedIn: true, email: 'eve@example.com', canMintToken: true }));
 	});
 	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-	return { port: (server.address() as AddressInfo).port, auths, close: () => server.close() };
+	port = (server.address() as AddressInfo).port;
+	return { port, auths, close: () => server.close() };
 }
 
-test('the token is never sent to a listener that is not this user\'s', async () => {
-	const peer = await listener();
+test('the token is never sent to a listener that cannot prove it holds it', async () => {
+	const peer = await listener(() => 'a guess');
 	try {
-		const result = await look({ port: peer.port, token: 'secret' }, async () => false);
+		assert.equal(await appProvesToken({ port: peer.port, token: 'secret' }), false);
+		const result = await look({ port: peer.port, token: 'secret' });
 		assert.deepEqual(result, { available: false, skip: 'not-verified' });
-		assert.deepEqual(peer.auths, [], 'nothing reached the port, the token least of all');
+		assert.ok(peer.auths.length > 0, 'the listener was asked to prove itself');
+		assert.deepEqual(peer.auths.filter((auth) => auth !== undefined), [], 'and was never sent the token');
 	} finally {
 		peer.close();
 	}
 });
 
-test('a listener of this user\'s is recognised as one, and then asked', { skip: process.platform !== 'darwin' && process.platform !== 'linux' }, async () => {
-	const peer = await listener();
+test('a proof made for another port is refused, so a listener cannot relay the real app', async () => {
+	const peer = await listener((port, nonce) => expectedProof('secret', port + 1, nonce));
 	try {
-		assert.equal(await listenerIsMine(peer.port), true);
+		assert.equal(await appProvesToken({ port: peer.port, token: 'secret' }), false);
+		assert.deepEqual(peer.auths.filter((auth) => auth !== undefined), []);
+	} finally {
+		peer.close();
+	}
+});
+
+test('an app that proves it holds the token is asked, with the token', async () => {
+	const peer = await listener((port, nonce) => expectedProof('secret', port, nonce));
+	try {
 		const result = await look({ port: peer.port, token: 'secret' });
 		assert.equal(result.available, true);
-		assert.deepEqual(peer.auths, ['Bearer secret']);
+		// One proof, then whoami with the bearer.
+		assert.deepEqual(peer.auths, [undefined, 'Bearer secret']);
 	} finally {
 		peer.close();
 	}
 	// Nothing listening is a no.
-	assert.equal(await listenerIsMine(peer.port), false);
+	assert.equal(await appProvesToken({ port: peer.port, token: 'secret' }), false);
+});
+
+test('a nonce is never reused', async () => {
+	const nonces: string[] = [];
+	const peer = await listener((port, nonce) => {
+		nonces.push(nonce);
+		return expectedProof('secret', port, nonce);
+	});
+	try {
+		assert.equal(await appProvesToken({ port: peer.port, token: 'secret' }), true);
+		assert.equal(await appProvesToken({ port: peer.port, token: 'secret' }), true);
+		assert.equal(nonces.length, 2);
+		assert.notEqual(nonces[0], nonces[1]);
+		assert.ok(nonces.every((n) => /^[A-Za-z0-9_-]{43}$/.test(n)));
+	} finally {
+		peer.close();
+	}
 });
