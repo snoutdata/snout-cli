@@ -48,7 +48,14 @@ export interface DeployedContainer {
 
 export interface ContainersAnswer {
 	ref: string;
-	allowance: { deployed: number; maxContainers: number; memoryMb: number; cpuPercent: number } | null;
+	allowance: {
+		deployed: number;
+		maxContainers: number;
+		memoryMb: number;
+		cpuPercent: number;
+		/** This month's sending (UTC); at the allowance the project's containers stop until the 1st. Absent before 2026-10-14. */
+		egress?: { month: string | null; usedBytes: number; allowanceBytes: number; held: boolean };
+	} | null;
 	containers: DeployedContainer[];
 }
 
@@ -193,7 +200,16 @@ export async function list(ref: string): Promise<void> {
 				say(dim(`  ${one.name}: ${one.statusDetail}`));
 			}
 		}
+		const egress = answer.allowance?.egress;
+		if (egress && egress.allowanceBytes > 0) {
+			say(dim(`  Sent this month: ${gigabytes(egress.usedBytes)} of ${gigabytes(egress.allowanceBytes)}. At ${gigabytes(egress.allowanceBytes)} the project's containers stop until the 1st.`));
+		}
 	});
+}
+
+/** Bytes as GB with at most one decimal: 5 GB, 0.3 GB. */
+function gigabytes(bytes: number): string {
+	return `${Math.round((bytes / 1024 ** 3) * 10) / 10} GB`;
 }
 
 export async function restart(ref: string, name: string): Promise<void> {
