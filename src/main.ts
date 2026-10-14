@@ -131,6 +131,8 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
 
   snoutdata containers deploy <name> <image> [--port 8080] [--registry-user U --stdin]
                                            a Docker image of yours, running all the time
+  snoutdata containers deploy <name> --dockerfile <dir>
+                                           or built from a Dockerfile with your own Docker
   snoutdata containers list                status, image and URL of each
   snoutdata containers logs [name] [--errors] [--tail N] [--follow]
   snoutdata containers restart <name>
@@ -540,8 +542,25 @@ async function run(args: ParsedArgs): Promise<number> {
 				case 'deploy': {
 					const name = rest[0];
 					const image = rest[1];
+					const dockerfile = flagString(args, 'dockerfile');
+					if (name && dockerfile) {
+						if (image) {
+							throw new UsageError('containers deploy takes an image or --dockerfile, not both');
+						}
+						if (flagString(args, 'registry-user') || flagBoolean(args, 'clear-registry')) {
+							throw new UsageError('an image built with --dockerfile goes to SnoutData\'s registry and needs no registry login');
+						}
+						await containers.deployDockerfile(ref(), name, {
+							path: dockerfile,
+							port: flagNumber(args, 'port'),
+							wait: !flagBoolean(args, 'no-wait')
+						});
+						return 0;
+					}
 					if (!name || !image) {
-						throw new UsageError('containers deploy needs a name and an image: snoutdata containers deploy <name> <image>');
+						throw new UsageError(
+							'containers deploy needs a name and an image: snoutdata containers deploy <name> <image>, or <name> --dockerfile <dir>'
+						);
 					}
 					const registryUser = flagString(args, 'registry-user');
 					if (registryUser && !flagBoolean(args, 'stdin')) {
