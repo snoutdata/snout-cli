@@ -3,7 +3,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { buildArgs, buildInput } from './containers.js';
+import { buildAndUpload, buildArgs, buildInput, deployDockerfile, uploadFailure, withoutCloudInternals, type DockerfileIo } from './containers.js';
 
 test('--dockerfile takes a folder with a Dockerfile, or the Dockerfile itself, and says so when it is neither', async () => {
 	const folder = await mkdtemp(join(tmpdir(), 'ct-build-'));
@@ -15,20 +15,100 @@ test('--dockerfile takes a folder with a Dockerfile, or the Dockerfile itself, a
 	await assert.rejects(buildInput(join(folder, 'missing')), /does not exist/);
 });
 
-test('the build is linux/arm64 only, one image with no attestation, pushed to the tag, its digest written down', () => {
-	const args = buildArgs({ context: './app', file: null, tag: 'r.example/s-fleet/ct/abc:wa', metadataFile: '/tmp/m.json' });
-	assert.deepEqual(args, [
-		'buildx',
-		'build',
-		'--platform',
-		'linux/arm64',
-		'--provenance=false',
-		'--tag',
-		'r.example/s-fleet/ct/abc:wa',
-		'--push',
-		'--metadata-file',
-		'/tmp/m.json',
-		'./app'
-	]);
-	assert.deepEqual(buildArgs({ context: '.', file: './Dockerfile.prod', tag: 't', metadataFile: 'm' }).slice(-3), ['--file', './Dockerfile.prod', '.']);
+test('the build is linux/arm64 only, one image with no attestation, written to an OCI archive and pushed nowhere', () => {
+	const args = buildArgs({ context: './app', file: null, archive: '/tmp/b/image.tar' });
+	assert.deepEqual(args, ['buildx', 'build', '--platform', 'linux/arm64', '--provenance=false', '--output', 'type=oci,dest=/tmp/b/image.tar', './app']);
+	assert.ok(!args.includes('--push'));
+	assert.deepEqual(buildArgs({ context: '.', file: './Dockerfile.prod', archive: 'a' }).slice(-3), ['--file', './Dockerfile.prod', '.']);
+});
+
+const DIGEST = `sha256:${'c'.repeat(64)}`;
+const TICKET_URL = `https://r1abcdefghijk.api.snoutdata.com/containers/v1/_upload/${'t'.repeat(43)}`;
+/** What a leaked infrastructure name would look like; none of it may reach the person. */
+const LEAKY = /amazonaws|dkr\.ecr|\b\d{12}\b|arn:aws|docker login|registry login/i;
+
+function fakeIo(options: { upload?: { status: number; body: string }; size?: number; deployError?: string; expiresInMs?: number } = {}) {
+	const said: string[] = [];
+	const docker: string[][] = [];
+	const asked: Record<string, unknown>[] = [];
+	const uploads: string[] = [];
+	const removed: string[] = [];
+	const io: DockerfileIo = {
+		docker: async (args) => {
+			docker.push([...args]);
+			return 0;
+		},
+		scratch: async () => '/tmp/b',
+		remove: async (dir) => {
+			removed.push(dir);
+		},
+		size: async () => options.size ?? 40 * 1024 * 1024,
+		upload: async (url) => {
+			uploads.push(url);
+			return options.upload ?? { status: 200, body: JSON.stringify({ name: 'wa', digest: DIGEST }) };
+		},
+		ask: async <T>(body: Record<string, unknown>): Promise<T> => {
+			asked.push(body);
+			if (body.action === 'upload-ticket') {
+				return { url: TICKET_URL, expiresAt: new Date(Date.now() + (options.expiresInMs ?? 15 * 60_000)).toISOString() } as T;
+			}
+			if (options.deployError) {
+				throw new Error(options.deployError);
+			}
+			return { ref: 'r1', allowance: null, containers: [] } as T;
+		},
+		say: (line) => said.push(line),
+		now: () => Date.now()
+	};
+	return { io, said, docker, asked, uploads, removed };
+}
+
+test('--dockerfile asks for a link, builds an archive, uploads it there and returns the stored digest', async () => {
+	const { io, docker, asked, uploads, removed } = fakeIo();
+	const digest = await buildAndUpload('r1', 'wa', { context: './app', file: null }, io);
+	assert.equal(digest, DIGEST);
+	assert.deepEqual(asked, [{ ref: 'r1', action: 'upload-ticket', name: 'wa' }]);
+	assert.deepEqual(docker.map((a) => a.slice(0, 2).join(' ')), ['version --format', 'buildx build']);
+	assert.deepEqual(uploads, [TICKET_URL]);
+	assert.deepEqual(removed, ['/tmp/b']);
+	// A link about to run out after a long build is asked for again.
+	const late = fakeIo({ expiresInMs: 60_000 });
+	await buildAndUpload('r1', 'wa', { context: './app', file: null }, late.io);
+	assert.equal(late.asked.filter((b) => b.action === 'upload-ticket').length, 2);
+});
+
+test('nothing the CLI prints or throws names the cloud provider, an account, a registry or a login', async () => {
+	// Every line of a deploy that worked, what it printed to the terminal included.
+	const folder = await mkdtemp(join(tmpdir(), 'ct-build-'));
+	await writeFile(join(folder, 'Dockerfile'), 'FROM alpine\n');
+	const happy = fakeIo();
+	const printed: string[] = [];
+	const writes = { out: process.stdout.write.bind(process.stdout), err: process.stderr.write.bind(process.stderr) };
+	process.stdout.write = ((chunk: string) => (printed.push(String(chunk)), true)) as typeof process.stdout.write;
+	process.stderr.write = ((chunk: string) => (printed.push(String(chunk)), true)) as typeof process.stderr.write;
+	try {
+		await deployDockerfile('r1', 'wa', { path: folder, wait: false }, happy.io);
+	} finally {
+		process.stdout.write = writes.out;
+		process.stderr.write = writes.err;
+	}
+	for (const line of [...happy.said, ...printed, ...happy.docker.flat()]) {
+		assert.doesNotMatch(line, LEAKY, line);
+	}
+	// A refusal and a deploy error that DID carry a name of ours are shown without it.
+	const refused = fakeIo({ upload: { status: 502, body: JSON.stringify({ error: 'could not push to 123456789012.dkr.ecr.us-east-1.amazonaws.com/s-fleet/ct/r1abcdefghijk' }) } });
+	await assert.rejects(buildAndUpload('r1', 'wa', { context: '.', file: null }, refused.io), (error: Error) => !LEAKY.test(error.message) && /SnoutData's registry/.test(error.message));
+	const deploy = fakeIo({ deployError: 'nothing at 123456789012.dkr.ecr.us-east-1.amazonaws.com/s-fleet/ct/x' });
+	await assert.rejects(deployDockerfile('r1', 'wa', { path: folder, wait: false }, deploy.io), (error: Error) => !LEAKY.test(error.message));
+});
+
+test('an archive over the upload cap is refused before it is sent; a refused link says why', async () => {
+	const big = fakeIo({ size: 3 * 1024 ** 3 });
+	await assert.rejects(buildAndUpload('r1', 'wa', { context: '.', file: null }, big.io), /at most 1 GB compressed/);
+	assert.equal(big.uploads.length, 0);
+	assert.deepEqual(big.removed, ['/tmp/b']);
+	const used = fakeIo({ upload: { status: 401, body: JSON.stringify({ error: 'This upload link is not valid: it was used already.' }) } });
+	await assert.rejects(buildAndUpload('r1', 'wa', { context: '.', file: null }, used.io), /not valid/);
+	assert.match(uploadFailure(413, ''), /at most 1 GB/);
+	assert.equal(withoutCloudInternals('arn:aws:iam::role/x said no'), 'a SnoutData credential said no');
 });

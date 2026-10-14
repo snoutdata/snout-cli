@@ -548,7 +548,7 @@ async function run(args: ParsedArgs): Promise<number> {
 							throw new UsageError('containers deploy takes an image or --dockerfile, not both');
 						}
 						if (flagString(args, 'registry-user') || flagBoolean(args, 'clear-registry')) {
-							throw new UsageError('an image built with --dockerfile goes to SnoutData\'s registry and needs no registry login');
+							throw new UsageError('an image built with --dockerfile is uploaded to the project and needs no registry login');
 						}
 						await containers.deployDockerfile(ref(), name, {
 							path: dockerfile,

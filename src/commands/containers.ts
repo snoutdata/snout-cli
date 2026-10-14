@@ -23,11 +23,10 @@
  * ## Or built from a Dockerfile, with your own Docker (`--dockerfile`)
  *
  * No build service of ours (CT2): `deploy <name> --dockerfile <dir>` builds the folder for
- * linux/arm64 with the Docker on this machine and pushes it straight into the project's own
- * repository in SnoutData's registry, with a login the project's host mints for that one
- * repository and that ends within the hour. The login goes to `docker login` on stdin and is
- * logged out again after the push, so it is in neither the shell history nor the Docker config.
- * Then it deploys what it pushed, by digest.
+ * linux/arm64 with the Docker on this machine into an image archive (OCI), uploads it to the
+ * project's own address with a link that works once and for 15 minutes, and deploys the digest the
+ * upload was stored at (CT28). No registry login and no registry address: the link is the whole
+ * credential, and where SnoutData keeps the image is SnoutData's business.
  *
  * Either way the host copies the image into SnoutData's registry the first time it starts it, so
  * a restart or a move never reaches the registry it came from again (CT25).
@@ -40,7 +39,10 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { call } from '../api.js';
@@ -203,16 +205,11 @@ async function present(ref: string, name: string, answer: ContainersAnswer, wait
 // deploy --dockerfile
 // ------------------------------------------------------------------------------
 
-export interface PushLogin {
-	registry: string;
-	repository: string;
-	username: string;
-	password: string;
-	expiresAt: string | null;
-}
+/** The most an upload may be; the image itself may be at most 1 GB compressed, which the host checks. */
+export const MAX_UPLOAD_BYTES = 2 * 1024 ** 3;
 
-/** How long the CLI waits for the project's host to mint a push login (its poll is every 5 s). */
-const PUSH_LOGIN_WAIT_MS = 90_000;
+/** A link is asked for again when less than this is left on it after the build. */
+const TICKET_MARGIN_MS = 3 * 60_000;
 
 /**
  * What `--dockerfile <path>` names: a folder holding a `Dockerfile`, or a Dockerfile itself (then
@@ -236,100 +233,208 @@ export async function buildInput(path: string): Promise<{ context: string; file:
 	return { context: dirname(path), file: path };
 }
 
-/** `docker buildx build`'s arguments: linux/arm64 only, one manifest, pushed, its digest written down. */
-export function buildArgs(input: { context: string; file: string | null; tag: string; metadataFile: string }): string[] {
+/** `docker buildx build`'s arguments: linux/arm64 only, one image with no attestation, written to an OCI archive. */
+export function buildArgs(input: { context: string; file: string | null; archive: string }): string[] {
 	return [
 		'buildx',
 		'build',
 		'--platform',
 		'linux/arm64',
-		// No provenance attestation: what is pushed is one image, the one that runs.
+		// No provenance attestation: what is uploaded is one image, the one that runs.
 		'--provenance=false',
-		'--tag',
-		input.tag,
-		'--push',
-		'--metadata-file',
-		input.metadataFile,
+		'--output',
+		`type=oci,dest=${input.archive}`,
 		...(input.file ? ['--file', input.file] : []),
 		input.context
 	];
 }
 
+/**
+ * A sentence from SnoutData Cloud with anything of the infrastructure behind it taken out: a
+ * registry host name of the cloud provider's (which carries an account number and a region), a
+ * resource name of theirs, and any bare 12-digit account number. The cloud already answers without
+ * them; this is the second line.
+ */
+export function withoutCloudInternals(text: string): string {
+	return text
+		.replace(/\b\d{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com(?:\/[^\s"',;)]*)?/g, "SnoutData's registry")
+		.replace(/\barn:aws[a-z-]*:[^\s"',;)]*/g, 'a SnoutData credential')
+		.replace(/\b[a-z0-9.-]*\.amazonaws\.com(?:\/[^\s"',;)]*)?/g, 'SnoutData Cloud')
+		.replace(/\b\d{12}\b/g, '(an account)');
+}
+
+/** The sentence an upload's refusal carries, or one for a status with none. */
+export function uploadFailure(status: number, body: string): string {
+	let said = '';
+	try {
+		const parsed = JSON.parse(body) as { error?: unknown; message?: unknown };
+		said = String(parsed.error ?? parsed.message ?? '');
+	} catch {
+		// Not JSON: the status says it.
+	}
+	if (said) {
+		return withoutCloudInternals(said);
+	}
+	if (status === 413) {
+		return "the image is too large to upload: a container's image may be at most 1 GB compressed; a slimmer base (alpine, distroless, -slim) usually fixes it.";
+	}
+	return `the upload failed (${status}); build again in a moment.`;
+}
+
+/** Everything `--dockerfile` does outside itself, so the steps are tested without Docker or a network. */
+export interface DockerfileIo {
+	/** Run docker with its output on stderr; the exit code. Throws when there is no docker at all. */
+	docker(args: readonly string[]): Promise<number>;
+	scratch(): Promise<string>;
+	remove(dir: string): Promise<void>;
+	size(path: string): Promise<number>;
+	/** PUT the file to the URL, streamed. The answer's status and body. */
+	upload(url: string, file: string): Promise<{ status: number; body: string }>;
+	ask<T>(body: Record<string, unknown>): Promise<T>;
+	say(line: string): void;
+	now(): number;
+}
+
 /** Run docker with its output on stderr (stdout is the answer's, and JSON in --json mode). */
-function docker(args: readonly string[], options: { stdin?: string } = {}): Promise<number> {
+function docker(args: readonly string[]): Promise<number> {
 	return new Promise((resolve, reject) => {
-		const child = spawn('docker', args, { stdio: [options.stdin === undefined ? 'ignore' : 'pipe', 2, 2] });
+		const child = spawn('docker', args, { stdio: ['ignore', 2, 2] });
 		child.on('error', (error) => reject(error));
 		child.on('close', (code) => resolve(code ?? 1));
-		if (options.stdin !== undefined) {
-			child.stdin?.end(options.stdin);
-		}
 	});
 }
 
-/** Ask the project's host for a login to its repository, and wait for it. */
-export async function runPushLogin(ref: string): Promise<PushLogin> {
-	await call('cloud-project-containers', { ref, action: 'push-login' });
-	const until = Date.now() + PUSH_LOGIN_WAIT_MS;
-	while (Date.now() < until) {
-		await new Promise((resolve) => setTimeout(resolve, 1_500));
-		const answer = await call<{ pending?: boolean; login?: PushLogin }>('cloud-project-containers', {
-			ref,
-			action: 'push-login',
-			waiting: true
+/** A file PUT to a URL, streamed from disk with its length, never held in memory. */
+function uploadFile(url: string, file: string, length: number): Promise<{ status: number; body: string }> {
+	return new Promise((resolve, reject) => {
+		const target = new URL(url);
+		const request = (target.protocol === 'http:' ? httpRequest : httpsRequest)(target, {
+			method: 'PUT',
+			headers: { 'content-type': 'application/octet-stream', 'content-length': String(length) }
 		});
-		if (answer.login) {
-			return answer.login;
-		}
-	}
-	throw new Error("the project's host did not hand over a push login in 90 seconds; try again in a moment.");
+		request.on('response', (response) => {
+			const chunks: Buffer[] = [];
+			response.on('data', (chunk: Buffer) => chunks.push(chunk));
+			response.on('end', () => resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }));
+			response.on('error', reject);
+		});
+		request.on('error', reject);
+		const stream = createReadStream(file);
+		stream.on('error', (error) => {
+			request.destroy();
+			reject(error);
+		});
+		stream.pipe(request);
+	});
 }
 
-export async function deployDockerfile(
+const realIo: DockerfileIo = {
+	docker,
+	scratch: () => mkdtemp(join(tmpdir(), 'snoutdata-build-')),
+	remove: (dir) => rm(dir, { recursive: true, force: true }),
+	size: async (path) => (await stat(path)).size,
+	upload: async (url, file) => uploadFile(url, file, (await stat(file)).size),
+	ask: (body) => call('cloud-project-containers', body),
+	say: (line) => say(dim(line)),
+	now: () => Date.now()
+};
+
+function megabytes(bytes: number): string {
+	return `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
+}
+
+async function uploadTicket(io: DockerfileIo, ref: string, name: string): Promise<{ url: string; expiresAt: string }> {
+	const ticket = await io.ask<{ url?: string; expiresAt?: string }>({ ref, action: 'upload-ticket', name });
+	if (typeof ticket.url !== 'string' || !ticket.url.startsWith('https://')) {
+		throw new Error('SnoutData Cloud did not hand over an upload link; try again in a moment.');
+	}
+	return { url: ticket.url, expiresAt: String(ticket.expiresAt ?? '') };
+}
+
+/**
+ * Build, upload, and return the digest the upload was stored at. Every sentence from the cloud
+ * passes `withoutCloudInternals` before it is shown or thrown.
+ */
+export async function buildAndUpload(
 	ref: string,
 	name: string,
-	options: { path: string; port?: number; wait?: boolean }
-): Promise<void> {
-	checkName(name);
-	const input = await buildInput(options.path);
+	input: { context: string; file: string | null },
+	io: DockerfileIo = realIo
+): Promise<string> {
 	try {
-		if ((await docker(['version', '--format', '{{.Server.Version}}'])) !== 0) {
+		if ((await io.docker(['version', '--format', '{{.Server.Version}}'])) !== 0) {
 			throw new Error('docker answered with an error');
 		}
 	} catch {
 		throw new Error('deploy --dockerfile builds with your own Docker, and none is running here. Start Docker, or deploy an image from a registry.');
 	}
-	say(dim(`${name}: asking the project's host for a login to its repository`));
-	const login = await runPushLogin(ref);
-	const scratch = await mkdtemp(join(tmpdir(), 'snoutdata-build-'));
-	const metadataFile = join(scratch, 'metadata.json');
-	let digest = '';
 	try {
-		if ((await docker(['login', '--username', login.username, '--password-stdin', login.registry], { stdin: login.password })) !== 0) {
-			throw new Error(`docker login to ${login.registry} failed.`);
+		// Asked first, so a plan without containers says so before a build, not after one.
+		let ticket = await uploadTicket(io, ref, name);
+		const scratch = await io.scratch();
+		try {
+			const archive = join(scratch, 'image.tar');
+			io.say(`${name}: building ${input.file ? basename(input.file) : input.context} for linux/arm64`);
+			if ((await io.docker(buildArgs({ ...input, archive }))) !== 0) {
+				throw new Error(
+					'the build failed; its output is above. If it says the docker driver cannot export OCI, turn on the containerd image store, or run: docker buildx create --use'
+				);
+			}
+			const size = await io.size(archive).catch(() => 0);
+			if (size <= 0) {
+				throw new Error('docker finished but wrote no image archive, so there is nothing to upload.');
+			}
+			if (size > MAX_UPLOAD_BYTES) {
+				throw new Error(`the image is ${megabytes(size)}, and a container's image may be at most 1 GB compressed. A slimmer base (alpine, distroless, -slim) usually fixes it.`);
+			}
+			// A long build can outlast the link: ask again rather than upload to one about to run out.
+			if (!(Date.parse(ticket.expiresAt) - io.now() > TICKET_MARGIN_MS)) {
+				ticket = await uploadTicket(io, ref, name);
+			}
+			io.say(`${name}: uploading the image (${megabytes(size)})`);
+			const answer = await io.upload(ticket.url, archive);
+			if (answer.status !== 200) {
+				throw new Error(uploadFailure(answer.status, answer.body));
+			}
+			let digest = '';
+			try {
+				digest = String((JSON.parse(answer.body) as { digest?: unknown }).digest ?? '');
+			} catch {
+				// Checked below.
+			}
+			if (!/^sha256:[0-9a-f]{64}$/.test(digest)) {
+				throw new Error('the upload finished without saying what it stored, so there is nothing to deploy; build again.');
+			}
+			return digest;
+		} finally {
+			await io.remove(scratch).catch(() => undefined);
 		}
-		say(dim(`${name}: building ${input.file ? basename(input.file) : input.context} for linux/arm64 and pushing it`));
-		const built = await docker(buildArgs({ ...input, tag: `${login.repository}:${name}`, metadataFile }));
-		if (built !== 0) {
-			throw new Error('the build or the push failed; its output is above.');
-		}
-		const metadata = JSON.parse(await readFile(metadataFile, 'utf8')) as Record<string, unknown>;
-		digest = String(metadata['containerimage.digest'] ?? '');
-		if (!/^sha256:[0-9a-f]{64}$/.test(digest)) {
-			throw new Error('docker did not say what digest it pushed.');
-		}
-	} finally {
-		// The login ends within the hour anyway; it does not stay in the Docker config meanwhile.
-		await docker(['logout', login.registry]).catch(() => 1);
-		await rm(scratch, { recursive: true, force: true });
+	} catch (error) {
+		throw new Error(withoutCloudInternals(error instanceof Error ? error.message : String(error)));
 	}
-	const answer = await call<ContainersAnswer>('cloud-project-containers', {
-		ref,
-		action: 'deploy',
-		name,
-		pushed: digest,
-		...(options.port === undefined ? {} : { port: options.port })
-	});
+}
+
+export async function deployDockerfile(
+	ref: string,
+	name: string,
+	options: { path: string; port?: number; wait?: boolean },
+	io: DockerfileIo = realIo
+): Promise<void> {
+	checkName(name);
+	const input = await buildInput(options.path);
+	const digest = await buildAndUpload(ref, name, input, io);
+	let answer: ContainersAnswer;
+	try {
+		answer = await io.ask<ContainersAnswer>({
+			ref,
+			action: 'deploy',
+			name,
+			pushed: digest,
+			...(options.port === undefined ? {} : { port: options.port })
+		});
+	} catch (error) {
+		throw new Error(withoutCloudInternals(error instanceof Error ? error.message : String(error)));
+	}
 	await present(ref, name, answer, options.wait !== false);
 }
 
