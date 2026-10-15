@@ -11,7 +11,8 @@
 
 import * as api from '../api.js';
 import { UsageError } from '../args.js';
-import { bold, dim, emit, say, table } from '../output.js';
+import { fail } from '../failure.js';
+import { bold, dim, emit, isJsonMode, say, table } from '../output.js';
 import { restoreReason } from '../mcp.js';
 
 export type Product = 'auth' | 'storage' | 'data-api' | 'push';
@@ -175,6 +176,15 @@ export async function domainsCommand(ref: string, action: string | undefined, ho
 		throw new UsageError(`unknown command: domains ${action}`);
 	}
 	const result = await domainAction(ref, action, hostname ?? '');
+	// A verify that did not verify is a command that did not succeed: exit 4 ("not ready yet"),
+	// so `snoutdata domains verify X && ...` in a script stops here. Until 0.17.1 it exited 0 with
+	// the records printed, and in --json mode said `"verified": false` under an exit code of 0.
+	if (action === 'verify' && result.domain && !result.domain.verified) {
+		if (!isJsonMode()) {
+			printRecords(result.domain, ref);
+		}
+		fail('not-ready', result.domain.verificationError ?? `${hostname} is not verified yet. Publish the records above, then run this again.`, { ref, domain: result.domain });
+	}
 	emit(result, () => {
 		if (action === 'remove') {
 			say(`${hostname} removed.`);
