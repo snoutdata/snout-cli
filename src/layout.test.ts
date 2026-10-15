@@ -35,10 +35,10 @@ test('a door with the current names is asked once, on the new path, with Snout-K
 
 test('a door with only the earlier names: one 404, the same request on the earlier path, then remembered', async () => {
 	forgetHosts();
-	const { fetcher, seen } = door(['/v1/fn', '/v1/identity']);
+	const { fetcher, seen } = door(['/functions/v1', '/auth/v1']);
 	const first = await doorFetch('https://b.example', identityRoute('/session?via=renew', '/token?grant_type=refresh_token'), { method: 'POST', key: 'k', body: 'b' }, fetcher);
 	assert.equal(first.status, 200);
-	assert.deepEqual(seen.map((one) => one.url), ['https://b.example/v1/identity/session?via=renew', 'https://b.example/v1/identity/session?via=renew']);
+	assert.deepEqual(seen.map((one) => one.url), ['https://b.example/v1/identity/session?via=renew', 'https://b.example/auth/v1/token?grant_type=refresh_token']);
 	assert.deepEqual(seen[1]!.headers, { apikey: 'k' });
 	assert.equal(seen[1]!.body, 'b');
 	assert.equal(seen[1]!.method, 'POST');
@@ -46,7 +46,7 @@ test('a door with only the earlier names: one 404, the same request on the earli
 
 	// The rest of the run goes straight to the earlier names on that host.
 	await doorFetch('https://b.example', fnRoute('cloud-project-list'), { method: 'POST', key: 'k' }, fetcher);
-	assert.equal(seen.at(-1)!.url, 'https://b.example/v1/fn/cloud-project-list');
+	assert.equal(seen.at(-1)!.url, 'https://b.example/functions/v1/cloud-project-list');
 	assert.equal(seen.length, 3);
 });
 
@@ -71,6 +71,6 @@ test('a browser URL is built in the vocabulary the door speaks', async () => {
 	forgetHosts();
 	const modern = door(['/v1/identity']);
 	assert.equal(await browserUrl('https://e.example', identityRoute('/provider/start', '/authorize'), 'k', modern.fetcher), 'https://e.example/v1/identity/provider/start');
-	const earlier = door(['/v1/identity']);
-	assert.equal(await browserUrl('https://f.example', identityRoute('/provider/start', '/authorize'), 'k', earlier.fetcher), 'https://f.example/v1/identity/provider/start');
+	const earlier = door(['/auth/v1']);
+	assert.equal(await browserUrl('https://f.example', identityRoute('/provider/start', '/authorize'), 'k', earlier.fetcher), 'https://f.example/auth/v1/authorize');
 });

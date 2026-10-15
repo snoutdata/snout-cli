@@ -138,9 +138,9 @@ export function readStack(folder: string, name: string | null = null): LocalStac
 		apiPort,
 		dbPort,
 		// The stack's `.env` names them `APP_KEY`/`SERVER_KEY`, or, made by an earlier
-		// `snout-stack init`, `APP_KEY`/`SERVER_KEY`.
-		appKey: env.get('APP_KEY') || env.get('APP_KEY') || null,
-		serverKey: env.get('SERVER_KEY') || env.get('SERVER_KEY') || null,
+		// `snout-stack init`, `ANON_KEY`/`SERVICE_ROLE_KEY`.
+		appKey: env.get('APP_KEY') || env.get('ANON_KEY') || null,
+		serverKey: env.get('SERVER_KEY') || env.get('SERVICE_ROLE_KEY') || null,
 		ownerPassword
 	};
 }

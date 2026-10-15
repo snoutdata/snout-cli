@@ -59,7 +59,7 @@ export const BUNDLE_FORMAT = 1;
 /**
  * What a function may be called.
  *
- * It becomes a URL path segment (`/v1/fn/<name>`), a directory name in the
+ * It becomes a URL path segment (`/functions/v1/<name>`), a directory name in the
  * runtime's cache and a row's primary key, so the rule is checked once, here, and every
  * consumer trusts it afterwards. No dot and no slash is the security half: a name that
  * cannot contain `..` or `/` is a name no path built from it can escape with.
@@ -86,7 +86,7 @@ export function assertFunctionName(value: string): string {
 /**
  * Which function a request is for, from the path the front door forwards.
  *
- * The door strips `/v1/fn`, so what arrives is `/<name>` or `/<name>/anything`,
+ * The door strips `/functions/v1`, so what arrives is `/<name>` or `/<name>/anything`,
  * and everything after the name is the function's own business — a function is a server
  * and may route inside itself, which is what `serve` in somebody's `index.ts` does with
  * a router.
@@ -387,8 +387,8 @@ export interface ProjectFunctionManifest {
 	 *
 	 * Composed in the CONTROL PLANE, the platform's variables included, and written out by
 	 * the host verbatim. The host could derive the URL and mint the keys — it has neither
-	 * the key-minting code nor a reason to, and a second place that mints an app key is
-	 * two app keys for one project.
+	 * the key-minting code nor a reason to, and a second place that mints an `anon` key is
+	 * two `anon` keys for one project.
 	 */
 	readonly env: Readonly<Record<string, string>>;
 }
@@ -495,7 +495,7 @@ export function checkFunctionSize(
  * A secret's NAME, which is the half of a secret that is not a secret.
  *
  * Environment variables, so the C rule, plus a refusal of the names the runtime sets
- * itself. Letting a customer set `SNOUTDATA_SERVER_KEY` would not be a
+ * itself. Letting a customer set `SNOUTDATA_SERVICE_ROLE_KEY` would not be a
  * vulnerability — it is their own project's key — but letting them set the ones that say
  * WHICH project this is would be, so the reserved list is checked and not assumed.
  */
@@ -507,8 +507,8 @@ const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
  */
 export const PLATFORM_FUNCTION_ENV = {
 	url: 'SNOUTDATA_URL',
-	appKey: 'SNOUTDATA_APP_KEY',
-	serverKey: 'SNOUTDATA_SERVER_KEY'
+	anonKey: 'SNOUTDATA_ANON_KEY',
+	serviceRoleKey: 'SNOUTDATA_SERVICE_ROLE_KEY'
 } as const;
 
 /**

@@ -337,7 +337,7 @@ export interface DatabaseSchema {
 	 * is the only place that is missing. Postgres reports `public` here.
 	 *
 	 * Deliberately not "every schema the user has USAGE on". On a hosted project that is six
-	 * of them (auth, extensions, graphql, snout_graph, public, storage), and filling the
+	 * of them (auth, extensions, graphql, graphql_public, public, storage), and filling the
 	 * tree with schemas somebody else's services own is a worse answer than the bug.
 	 */
 	emptySchemas?: string[];

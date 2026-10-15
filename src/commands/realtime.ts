@@ -30,7 +30,7 @@ export interface RealtimeChannel {
 	name: string;
 	private: boolean;
 	clients: RealtimeClient[];
-	/** `{ key: { metas: [...] } }`, exactly as a client receives `roster_state`. */
+	/** `{ key: { metas: [...] } }`, exactly as a client receives `presence_state`. */
 	presence: Record<string, { metas: Array<Record<string, unknown>> }>;
 	messages: {
 		window_seconds: number;

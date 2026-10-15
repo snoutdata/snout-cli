@@ -207,7 +207,7 @@ const PLATFORM_SCHEMAS = new Set([
 	'snout_identity', 'snout_files', 'push', 'snout_live', 'snout_realtime', '_realtime', 'graphql', 'snout_graph',
 	'snout_ext', 'net', 'cron', 'pgbouncer', 'vault', 'pgsodium',
 	// The same schemas in a database made before they had these names.
-	'auth', 'storage', 'realtime', 'snout_graph', 'extensions'
+	'auth', 'storage', 'realtime', 'graphql_public', 'extensions'
 ]);
 /** Objects the platform puts in `public` or in no schema. */
 const PLATFORM_NAMES = /^(pgrst_ddl_watch|pgrst_drop_watch|snoutpod_[a-z_]+|snoutdata_realtime|snout_realtime_messages)(\(|$)/;

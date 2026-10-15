@@ -21,7 +21,7 @@ import { doorFetch, fnRoute, identityRoute } from './layout.js';
 
 export const ACCOUNTS_URL = process.env.SNOUTDATA_ACCOUNTS_URL ?? 'https://accounts.snoutdata.com';
 export const APP_KEY =
-	process.env.SNOUTDATA_APP_KEY ?? process.env.SNOUTDATA_APP_KEY ?? 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzbm91dGRhdGEiLCJyZWYiOiJ6ZjdnNjVtYjhmYXJhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4MDcwNDcsImV4cCI6MjEwNDg3NTUyNH0.M-Cb0wFEhJXU21cXtQxZAn-WnRcq4rK2uNSkeHdLucY';
+	process.env.SNOUTDATA_APP_KEY ?? process.env.SNOUTDATA_ANON_KEY ?? 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzbm91dGRhdGEiLCJyZWYiOiJ6ZjdnNjVtYjhmYXJhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4MDcwNDcsImV4cCI6MjEwNDg3NTUyNH0.M-Cb0wFEhJXU21cXtQxZAn-WnRcq4rK2uNSkeHdLucY';
 
 export class ApiError extends Error {
 	readonly status: number;
@@ -303,11 +303,11 @@ export async function connection(ref: string): Promise<Connection> {
 
 /**
  * The two API keys under their names here (`appKey`, `serverKey`), from an answer that may carry
- * them under the names a control plane older than them sends (`appKey`, `serverKey`).
+ * them under the names a control plane older than them sends (`anonKey`, `serviceRoleKey`).
  */
 export function withKeyNames<T extends { appKey?: string | null; serverKey?: string | null }>(answer: T): T & { appKey: string | null; serverKey: string | null } {
-	const { appKey, serverKey, ...rest } = answer as T & { appKey?: string | null; serverKey?: string | null };
-	return { ...(rest as T), appKey: answer.appKey ?? appKey ?? null, serverKey: answer.serverKey ?? serverKey ?? null };
+	const { anonKey, serviceRoleKey, ...rest } = answer as T & { anonKey?: string | null; serviceRoleKey?: string | null };
+	return { ...(rest as T), appKey: answer.appKey ?? anonKey ?? null, serverKey: answer.serverKey ?? serviceRoleKey ?? null };
 }
 
 /** The local stack this ref names, if it names one: the folder linked here, then Studio's list. */
