@@ -26,7 +26,7 @@ import { emit, say } from '../output.js';
 import { INSTALL_SH, NPM_INSTALL, VERSION, installKind, olderThan, type InstallKind } from '../version.js';
 
 const REGISTRY = process.env.SNOUTDATA_NPM_REGISTRY ?? 'https://registry.npmjs.org';
-const RELEASES = 'https://github.com/snoutdata/app/releases/download';
+const RELEASES = 'https://github.com/snoutdata/studio/releases/download';
 
 /** The published asset for a platform, as the release build names it. Null where none is built. */
 export function assetFor(platform: string, arch: string): string | null {
