@@ -18,6 +18,7 @@
  */
 
 import { ACCOUNTS_URL, APP_KEY, noticeFrom, outdated } from './api.js';
+import { doorFetch, fnRoute } from './layout.js';
 import { fail } from './failure.js';
 import { CLIENT_INFO } from './version.js';
 
@@ -36,9 +37,10 @@ export type DevicePoll =
 	| { status: 'denied' | 'used' | 'expired'; error?: string };
 
 async function post<T>(fn: string, body: unknown): Promise<{ status: number; body: T }> {
-	const response = await fetch(`${ACCOUNTS_URL}/v1/fn/${fn}`, {
+	const response = await doorFetch(ACCOUNTS_URL, fnRoute(fn), {
 		method: 'POST',
-		headers: { apikey: APP_KEY, 'Content-Type': 'application/json', 'x-client-info': CLIENT_INFO },
+		key: APP_KEY,
+		headers: { 'Content-Type': 'application/json', 'x-client-info': CLIENT_INFO },
 		body: JSON.stringify(body)
 	});
 	noticeFrom(response);

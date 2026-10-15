@@ -15,7 +15,7 @@ function stack(ref: string, extra = ''): string {
 	writeFileSync(join(folder, 'compose.yaml'), 'name: snout-stack\n');
 	writeFileSync(
 		join(folder, '.env'),
-		`# made by snout-stack init\nSNOUT_REF=${ref}\nANON_KEY=anon.jwt\nSERVICE_ROLE_KEY="service.jwt"\nPOSTGRES_OWNER_PASSWORD='p@ss w=rd'\nAPI_PORT=8001\nDB_PORT=54342\n${extra}`
+		`# made by snout-stack init\nSNOUT_REF=${ref}\nAPP_KEY=app.jwt\nSERVER_KEY="server.jwt"\nPOSTGRES_OWNER_PASSWORD='p@ss w=rd'\nAPI_PORT=8001\nDB_PORT=54342\n${extra}`
 	);
 	return folder;
 }
@@ -39,9 +39,18 @@ test('a stack folder becomes the owner connection Studio uses, on the loopback a
 	assert.equal(c.port, 54342);
 	assert.equal(c.ssl, 'disable');
 	assert.equal(c.uri, 'postgresql://abcdefghjkmnp_owner:p%40ss%20w%3Drd@127.0.0.1:54342/abcdefghjkmnp');
-	assert.equal(c.appKey, 'anon.jwt');
-	assert.equal(c.serverKey, 'service.jwt');
+	assert.equal(c.appKey, 'app.jwt');
+	assert.equal(c.serverKey, 'server.jwt');
 	assert.equal(read.apiUrl, 'http://127.0.0.1:8001');
+});
+
+test('a stack folder from an earlier snout-stack init names its keys APP_KEY and SERVER_KEY, and they are read', () => {
+	const folder = scratch();
+	writeFileSync(join(folder, 'compose.yaml'), 'name: snout-stack\n');
+	writeFileSync(join(folder, '.env'), 'SNOUT_REF=abcdefghjkmnp\nPOSTGRES_OWNER_PASSWORD=x\nANON_KEY=a.jwt\nSERVICE_ROLE_KEY=s.jwt\n');
+	const read = readStack(folder);
+	assert.equal(read.appKey, 'a.jwt');
+	assert.equal(read.serverKey, 's.jwt');
 });
 
 test("a stack made by hand with no ports in .env is where compose.yaml puts it: 8000 and 5432", () => {

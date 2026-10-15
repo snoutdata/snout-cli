@@ -52,7 +52,7 @@ describe('targetFromUrl', () => {
 describe('arrayLiteral', () => {
 	test('quotes every element, so a schema name from a command line cannot end the literal', () => {
 		assert.equal(arrayLiteral(['public']), `'{"public"}'`);
-		assert.equal(arrayLiteral(['public', 'auth']), `'{"public","auth"}'`);
+		assert.equal(arrayLiteral(['public', 'snout_identity']), `'{"public","snout_identity"}'`);
 		assert.equal(arrayLiteral([`o'brien`]), `'{"o''brien"}'`);
 		assert.equal(arrayLiteral(['a"b']), `'{"a\\"b"}'`);
 	});
@@ -213,13 +213,13 @@ describe('a sharded project (snout-lepis)', () => {
 		const db = database(3, [
 			{ schema: 'public', table: 'countries', kind: 'reference', keyColumn: null },
 			{ schema: 'public', table: 'orders', kind: 'sharded', keyColumn: 'tenant_id' },
-			{ schema: 'auth', table: 'users', kind: 'global', keyColumn: null }
+			{ schema: 'snout_identity', table: 'people', kind: 'global', keyColumn: null }
 		]);
 		const result = await generateTypes({ dbUrl: 'postgres://u:p@127.0.0.1:5432/app', sql: db.sql });
 		assert.equal(result.tables, 2);
 		assert.equal(result.types.match(/\borders: \{/g)?.length, 1);
 		assert.equal(result.types.match(/\bcountries: \{/g)?.length, 1);
-		// Only the schemas read; `auth` was not asked for.
+		// Only the schemas read; `snout_identity` was not asked for.
 		assert.deepEqual(result.distribution, [
 			{ schema: 'public', table: 'countries', kind: 'reference', keyColumn: null },
 			{ schema: 'public', table: 'orders', kind: 'sharded', keyColumn: 'tenant_id' }

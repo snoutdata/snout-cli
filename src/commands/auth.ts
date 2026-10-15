@@ -53,6 +53,8 @@ function shape(ref: string, status: Status): AuthSettings {
 			clientSecretSet: status.google?.clientSecretSet === true,
 			ready: status.google?.ready === true,
 		},
+		// The address registered in a Google console, which keeps this path for good: it is the
+		// one the auth service sends Google, and changing it would break every registration.
 		googleCallback: `https://${ref}.${API_DOMAIN}/auth/v1/callback`,
 		anonymous: {
 			enabled: status.anonymous?.enabled === true,

@@ -69,7 +69,7 @@ in this folder or a parent. `init` writes that file.
 | Sign in with Google (the user's own OAuth client; secret on stdin) | `… \| npx snoutdata auth google --client-id ID --stdin --json` |
 | Site URL and allowed redirect addresses | `npx snoutdata auth redirects --site-url URL --allow URL,URL --json` |
 | The project's own auth email (HTML must include `{{ .ConfirmationURL }}`) | `npx snoutdata auth template confirmation\|recovery\|magic_link\|invite\|email_change --file body.html --subject S --json` |
-| API keys for the client (app, server) | `npx snoutdata keys --json` |
+| API keys for the client (app key, server key) | `npx snoutdata keys --json` |
 | Deploy a function from `functions/NAME` | `npx snoutdata functions deploy NAME --json` |
 | List / delete functions | `npx snoutdata functions list\|delete NAME --json` |
 | Function secrets (names only are ever readable) | `npx snoutdata secrets list\|unset NAME --json` |
@@ -78,11 +78,11 @@ in this folder or a parent. `init` writes that file.
 | The same Postgres locally, migrated and seeded | `npx snoutdata start` |
 
 The project API is `https://<ref>.api.snoutdata.com` (`/v1/data`, `/v1/graph`, `/v1/identity`,
-`/v1/files`, `/v1/fn/<name>`). The server key bypasses row-level security: keep it
-on a server, never in client code.
+`/v1/files`, `/v1/live`, `/v1/fn/<name>`), with the key in the `Snout-Key` header. The server key
+bypasses row-level security: keep it on a server, never in client code.
 
 Database sign-in (Postgres 18 projects): `read` reads the project's own tables (including rows
-row-level security would hide) and writes nothing, and never the `auth`, `storage` or internal
+row-level security would hide) and writes nothing, and never the `snout_identity`, `snout_files` or internal
 schemas; `full` is everything the project password can do. The person connects with psql 18 plus
 `libpq-oauth`, using the connection string `grant` prints (it holds `oauth_issuer` and
 `oauth_client_id`, and no password), and approves the code psql prints at

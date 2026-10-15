@@ -9,12 +9,12 @@
  *
  *   * **It is printed only when it is asked for.** `keys` shows both, because that is
  *     what the command is; nothing else in the CLI prints it in passing.
- *   * **What it is gets said in words, every time.** `snout_server` bypasses row-level
+ *   * **What it is gets said in words, every time.** The server key bypasses row-level
  *     security. A key that reads every row of every table looks exactly like the other
  *     one in a terminal, and the difference is a customer's entire dataset.
  */
 
-import { call, connection } from '../api.js';
+import { call, connection, withKeyNames } from '../api.js';
 import { UsageError } from '../args.js';
 import { bold, dim, emit, say, table } from '../output.js';
 
@@ -68,11 +68,11 @@ export async function rotate(ref: string, options: { force: boolean }): Promise<
 	if (!options.force) {
 		// Not a prompt. Nothing in this CLI prompts; a command that would have to ask names
 		// the flag instead, and exits 2.
-		say(`Rotating the keys for ${ref} stops every app and server key already pasted anywhere.`);
+		say(`Rotating the keys for ${ref} stops every app key and server key already pasted anywhere.`);
 		say('Anything holding one (a deployed app, a CI secret, a teammate) breaks until it is updated.');
 		throw new UsageError('keys rotate needs --force, because this cannot be undone');
 	}
-	const result = await call<RotatedKeys>('cloud-project-rotate-jwt', { ref });
+	const result = withKeyNames(await call<RotatedKeys>('cloud-project-rotate-jwt', { ref })) as RotatedKeys;
 	emit(result, () => {
 		process.stdout.write(`${keyTable(result.appKey, result.serverKey)}\n`);
 		say('');
@@ -84,15 +84,15 @@ export async function rotate(ref: string, options: { force: boolean }): Promise<
 function keyTable(appKey: string, serverKey: string): string {
 	return table([
 		['KEY', 'VALUE'],
-		['snout_app', appKey],
-		['snout_server', serverKey]
+		['app key', appKey],
+		['server key', serverKey]
 	]);
 }
 
 function explain(issuedAt: string | null): void {
 	say('');
-	say(`${bold('snout_app')} is the public one: it goes in a browser, and row-level security decides what it reads.`);
-	say(`${bold('snout_server')} bypasses row-level security. Server side only, never in a client bundle.`);
+	say(`The ${bold('app key')} is the public one: it goes in a browser, and row-level security decides what it reads.`);
+	say(`The ${bold('server key')} bypasses row-level security. Server side only, never in a client bundle.`);
 	if (issuedAt) {
 		say(dim(`  issued ${issuedAt.slice(0, 10)}`));
 	}

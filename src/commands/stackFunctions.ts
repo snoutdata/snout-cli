@@ -86,7 +86,7 @@ export async function runLocalDeploy(stack: LocalStack, name: string, options: {
 			throw new CliFailure('failed', `docker compose up failed after changing who may call ${name}: ${up.err.trim().split(/\r?\n/).slice(-2).join(' ')}`);
 		}
 	}
-	return { ref: stack.ref, name, url: `${stack.apiUrl}/v1/fn/${name}`, verifyJwt: options.verifyJwt, local: stack.folder };
+	return { ref: stack.ref, name, url: localUrl(stack, name), verifyJwt: options.verifyJwt, local: stack.folder };
 }
 
 export async function localDeploy(stack: LocalStack, name: string, options: { dir?: string | undefined; verifyJwt: boolean }): Promise<void> {
@@ -99,9 +99,17 @@ export async function localDeploy(stack: LocalStack, name: string, options: { di
 	});
 }
 
+/**
+ * Where the stack's own gateway serves a function. Its gateway is the released snout-stack's,
+ * which serves functions under `/v1/fn` (the cloud's door also takes `/v1/fn`).
+ */
+function localUrl(stack: LocalStack, name: string): string {
+	return `${stack.apiUrl}/v1/fn/${name}`;
+}
+
 /** What `functions list` shows for a local project, as a value. */
 export function localFunctions(stack: LocalStack): { ref: string; local: string; functions: Array<{ name: string; url: string }> } {
-	return { ref: stack.ref, local: stack.folder, functions: functionNames(stack).map((name) => ({ name, url: `${stack.apiUrl}/v1/fn/${name}` })) };
+	return { ref: stack.ref, local: stack.folder, functions: functionNames(stack).map((name) => ({ name, url: localUrl(stack, name) })) };
 }
 
 export function localList(stack: LocalStack): void {
@@ -111,7 +119,7 @@ export function localList(stack: LocalStack): void {
 			say(`No functions in ${join(stack.folder, 'functions')}.`);
 			return;
 		}
-		process.stdout.write(`${table([['NAME', 'URL'], ...names.map((name) => [name, `${stack.apiUrl}/v1/fn/${name}`])])}\n`);
+		process.stdout.write(`${table([['NAME', 'URL'], ...names.map((name) => [name, localUrl(stack, name)])])}\n`);
 	});
 }
 

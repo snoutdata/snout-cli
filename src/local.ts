@@ -137,8 +137,10 @@ export function readStack(folder: string, name: string | null = null): LocalStac
 		apiUrl: (env.get('API_EXTERNAL_URL') || `http://127.0.0.1:${apiPort}`).replace(/\/$/, ''),
 		apiPort,
 		dbPort,
-		appKey: env.get('APP_KEY') || null,
-		serverKey: env.get('SERVER_KEY') || null,
+		// The stack's `.env` names them `APP_KEY`/`SERVER_KEY`, or, made by an earlier
+		// `snout-stack init`, `APP_KEY`/`SERVER_KEY`.
+		appKey: env.get('APP_KEY') || env.get('APP_KEY') || null,
+		serverKey: env.get('SERVER_KEY') || env.get('SERVER_KEY') || null,
 		ownerPassword
 	};
 }
