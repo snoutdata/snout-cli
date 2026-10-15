@@ -44,7 +44,7 @@ test('a stack folder becomes the owner connection Studio uses, on the loopback a
 	assert.equal(read.apiUrl, 'http://127.0.0.1:8001');
 });
 
-test('a stack folder from an earlier snout-stack init names its keys APP_KEY and SERVER_KEY, and they are read', () => {
+test('a stack folder from an earlier snout-stack init names its keys ANON_KEY and SERVICE_ROLE_KEY, and they are read', () => {
 	const folder = scratch();
 	writeFileSync(join(folder, 'compose.yaml'), 'name: snout-stack\n');
 	writeFileSync(join(folder, '.env'), 'SNOUT_REF=abcdefghjkmnp\nPOSTGRES_OWNER_PASSWORD=x\nANON_KEY=a.jwt\nSERVICE_ROLE_KEY=s.jwt\n');

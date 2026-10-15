@@ -199,15 +199,22 @@ const MANIFEST_ACCEPT = [
 	'application/vnd.docker.distribution.manifest.v2+json'
 ].join(', ');
 
-type Fetch = (
-	input: string,
-	init?: { method?: string; headers?: Record<string, string>; redirect?: 'manual' }
-) => Promise<{
-	status: number;
-	headers: { get(name: string): string | null };
+/** What `RegistryFetch` answers: a `fetch` Response is one, and so is the host agent's own (`host/registryPull.ts`). */
+export interface RegistryResponse {
+	readonly status: number;
+	readonly headers: { get(name: string): string | null };
 	text(): Promise<string>;
 	arrayBuffer(): Promise<ArrayBuffer>;
-}>;
+	/** Let go of a response nobody will read (a redirect hop, a 401 that is asked again). */
+	discard?(): void;
+}
+
+export type RegistryFetch<R extends RegistryResponse = RegistryResponse> = (
+	input: string,
+	init?: { method?: string; headers?: Record<string, string>; redirect?: 'manual' }
+) => Promise<R>;
+
+type Fetch = RegistryFetch;
 
 // ------------------------------------------------------------------------------
 // Where a registry may be: the public internet, over https, on 443
@@ -441,12 +448,12 @@ async function checkRegistryUrl(url: URL, network: RegistryNetwork): Promise<voi
 }
 
 /** One GET with every redirect followed by hand and checked; the credential stays on its origin. */
-async function guardedGet(
+async function guardedGet<R extends RegistryResponse>(
 	start: URL,
 	headers: Record<string, string>,
-	fetcher: Fetch,
+	fetcher: RegistryFetch<R>,
 	network: RegistryNetwork
-): Promise<Awaited<ReturnType<Fetch>>> {
+): Promise<R> {
 	let url = start;
 	const sent = { ...headers };
 	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
@@ -460,6 +467,7 @@ async function guardedGet(
 		if (![301, 302, 303, 307, 308].includes(response.status)) {
 			return response;
 		}
+		response.discard?.();
 		const location = response.headers.get('location');
 		if (!location) {
 			throw new Unreachable();
@@ -510,11 +518,24 @@ async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
 	return Array.from(new Uint8Array(hash), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/** A client for one repository: `get('manifests/<digest>', accept)`, `get('blobs/<digest>', accept)`. */
+export interface RegistryClient<R extends RegistryResponse = RegistryResponse> {
+	get(path: string, accept: string): Promise<R>;
+}
+
 /**
  * A client for one repository on one registry, which gets a token when the registry asks for one
- * and keeps it for the next request (a manifest then a config blob is the common pair).
+ * and keeps it for the next request (a manifest then a config blob is the common pair). Every URL
+ * it fetches passes the public-internet check above; anything refused throws, and the caller says
+ * `REGISTRY_UNREACHABLE` and nothing more. The host agent copies a customer's image through this
+ * too (`host/registryPull.ts`), so the rule is written once.
  */
-function registryClient(ref: ImageReference, credential: RegistryCredential | null, fetcher: Fetch, network: RegistryNetwork) {
+export function registryClient<R extends RegistryResponse>(
+	ref: ImageReference,
+	credential: RegistryCredential | null,
+	fetcher: RegistryFetch<R>,
+	network: RegistryNetwork
+): RegistryClient<R> {
 	const base = new URL(`${registryApiBase(ref.registry)}/v2/${ref.repository}/`);
 	let authorization: string | null = null;
 
@@ -527,10 +548,11 @@ function registryClient(ref: ImageReference, credential: RegistryCredential | nu
 		if (authorization) {
 			headers.authorization = authorization;
 		}
-		let response = await guardedGet(at(path), headers, fetcher, network);
-		if (response.status !== 401 || authorization) {
-			return response;
+		const first = await guardedGet(at(path), headers, fetcher, network);
+		if (first.status !== 401 || authorization) {
+			return first;
 		}
+		const response = first;
 		const challenge = parseChallenge(response.headers.get('www-authenticate'));
 		if (challenge?.scheme === 'basic') {
 			if (!credential) {
@@ -575,8 +597,8 @@ function registryClient(ref: ImageReference, credential: RegistryCredential | nu
 		} else {
 			return response;
 		}
-		response = await guardedGet(at(path), { accept, authorization }, fetcher, network);
-		return response;
+		response.discard?.();
+		return guardedGet(at(path), { accept, authorization }, fetcher, network);
 	}
 
 	return { get };
@@ -585,14 +607,15 @@ function registryClient(ref: ImageReference, credential: RegistryCredential | nu
 interface ManifestDescriptor {
 	mediaType?: string;
 	digest?: string;
+	size?: number;
 	platform?: { os?: string; architecture?: string; variant?: string };
 }
 
-interface ManifestBody {
+export interface ManifestBody {
 	mediaType?: string;
 	manifests?: ManifestDescriptor[];
-	config?: { digest?: string; size?: number };
-	layers?: { size?: number }[];
+	config?: { mediaType?: string; digest?: string; size?: number };
+	layers?: { mediaType?: string; digest?: string; size?: number }[];
 }
 
 /** What a single image's manifest says it weighs: the config and every layer, compressed. */
@@ -719,6 +742,56 @@ async function resolveChecked(
 		};
 	}
 	return { ok: true, digest, platforms, bytes };
+}
+
+/** The one linux/arm64 image a pinned reference names: its manifest, exactly as the registry signed it. */
+export interface FleetImageManifest {
+	readonly digest: string;
+	readonly mediaType: string;
+	readonly raw: Uint8Array;
+	readonly body: ManifestBody;
+}
+
+/**
+ * The linux/arm64 image manifest of `digest` (an index's arm64 entry, or the image itself), each
+ * manifest checked against the digest it was asked for. Throws on anything else, which the caller
+ * reads as `REGISTRY_UNREACHABLE`: this is the host agent copying an image the control plane
+ * already resolved, so there is nothing new for the customer to learn from why.
+ */
+export async function fleetImageManifest<R extends RegistryResponse>(client: RegistryClient<R>, digest: string): Promise<FleetImageManifest> {
+	async function manifest(wanted: string): Promise<FleetImageManifest> {
+		if (!isDigest(wanted)) {
+			throw new Unreachable();
+		}
+		const response = await client.get(`manifests/${wanted}`, MANIFEST_ACCEPT);
+		if (response.status !== 200) {
+			response.discard?.();
+			throw new Unreachable();
+		}
+		const buffer = await response.arrayBuffer();
+		const raw = new Uint8Array(buffer);
+		if (`sha256:${await sha256Hex(buffer)}` !== wanted) {
+			throw new Unreachable();
+		}
+		let body: ManifestBody;
+		try {
+			body = JSON.parse(new TextDecoder().decode(raw)) as ManifestBody;
+		} catch {
+			throw new Unreachable();
+		}
+		const mediaType = body.mediaType ?? (response.headers.get('content-type') ?? '').split(';')[0]?.trim() ?? '';
+		return { digest: wanted, mediaType, raw, body };
+	}
+	const top = await manifest(digest);
+	if (!Array.isArray(top.body.manifests)) {
+		return top;
+	}
+	const ours = top.body.manifests.find((m) => m.platform && runsOnFleet(platformName(m.platform)));
+	const child = await manifest(ours?.digest ?? '');
+	if (Array.isArray(child.body.manifests)) {
+		throw new Unreachable();
+	}
+	return child;
 }
 
 /**

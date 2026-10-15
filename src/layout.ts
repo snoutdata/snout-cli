@@ -33,14 +33,14 @@ function hostOf(base: string): string {
 	}
 }
 
-/** A function on the door: `/v1/fn/<name>`, earlier `/v1/fn/<name>`. */
+/** A function on the door: `/v1/fn/<name>`, earlier `/functions/v1/<name>`. */
 export function fnRoute(name: string, query = ''): Route {
-	return { path: `/v1/fn/${name}${query}`, oldPath: `/v1/fn/${name}${query}` };
+	return { path: `/v1/fn/${name}${query}`, oldPath: `/functions/v1/${name}${query}` };
 }
 
-/** An identity route: `/v1/identity<route>`, earlier `/v1/identity<oldRoute>`. */
+/** An identity route: `/v1/identity<route>`, earlier `/auth/v1<oldRoute>`. */
 export function identityRoute(route: string, oldRoute: string): Route {
-	return { path: `/v1/identity${route}`, oldPath: `/v1/identity${oldRoute}` };
+	return { path: `/v1/identity${route}`, oldPath: `/auth/v1${oldRoute}` };
 }
 
 /** Whether this run has learned that `base` serves only the earlier names. */

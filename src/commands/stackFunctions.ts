@@ -101,10 +101,10 @@ export async function localDeploy(stack: LocalStack, name: string, options: { di
 
 /**
  * Where the stack's own gateway serves a function. Its gateway is the released snout-stack's,
- * which serves functions under `/v1/fn` (the cloud's door also takes `/v1/fn`).
+ * which serves functions under `/functions/v1` (the cloud's door also takes `/v1/fn`).
  */
 function localUrl(stack: LocalStack, name: string): string {
-	return `${stack.apiUrl}/v1/fn/${name}`;
+	return `${stack.apiUrl}/functions/v1/${name}`;
 }
 
 /** What `functions list` shows for a local project, as a value. */
