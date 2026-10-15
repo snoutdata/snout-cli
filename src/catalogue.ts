@@ -60,7 +60,7 @@ export const COMMANDS = [
 	{ name: 'secrets set', summary: 'Set the environment functions and containers run with', flags: ['--ref', '--stdin'] },
 	{ name: 'secrets list', summary: 'The names, never the values', flags: ['--ref'] },
 	{ name: 'secrets unset', summary: 'Remove one', flags: ['--ref'] },
-	{ name: 'keys', summary: 'The app and server API keys for a project', flags: ['--ref'] },
+	{ name: 'keys', summary: 'The app key and server key for a project', flags: ['--ref'] },
 	{ name: 'keys rotate', summary: 'New keys, breaking every one already issued', flags: ['--ref', '--force'] },
 	{ name: 'teams', summary: 'Teams this account belongs to', flags: [] },
 	{ name: 'link', summary: 'Point this folder at a project', flags: ['--ref'] },

@@ -7,7 +7,7 @@
  *
  * ## Google does not go through the auth server's redirect, and that is the whole of the 2026-09-07 fix
  *
- * `/v1/identity/provider/start?provider=google` used the Google client configured inside the auth
+ * The identity service's provider redirect (`provider=google`) used the Google client configured inside the auth
  * server of the day, which belonged to a GCP project we no longer use and has been deleted. It answers
  * `401 deleted_client`. Nobody noticed for months because this CLI was the only surface
  * still using that door, and it had never been driven by a person.
@@ -53,6 +53,7 @@ import { createServer } from 'node:http';
 import { createInterface } from 'node:readline/promises';
 import { spawn } from 'node:child_process';
 import { ACCOUNTS_URL, APP_KEY } from '../api.js';
+import { browserUrl, doorFetch, identityRoute } from '../layout.js';
 import { UsageError } from '../args.js';
 import { writeAuth } from '../config.js';
 import { CliFailure, codeForStatus } from '../failure.js';
@@ -359,9 +360,10 @@ async function codeFromBrowser(options: {
 
 /** The auth server's end of every PKCE flow: one code, one verifier, one session. */
 async function exchangePkceCode(code: string, verifier: string): Promise<LoginResult> {
-	const response = await fetch(`${ACCOUNTS_URL}/v1/identity/session?via=pkce`, {
+	const response = await doorFetch(ACCOUNTS_URL, identityRoute('/session?via=pkce', '/token?grant_type=pkce'), {
 		method: 'POST',
-		headers: { apikey: APP_KEY, 'Content-Type': 'application/json' },
+		key: APP_KEY,
+		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ auth_code: code, code_verifier: verifier })
 	});
 	if (!response.ok) {
@@ -433,9 +435,10 @@ async function loginWithGoogle(options: {
 	});
 
 	const idToken = await exchangeCodeForIdToken(code, verifier, redirectUri);
-	const response = await fetch(`${ACCOUNTS_URL}/v1/identity/session?via=id_token`, {
+	const response = await doorFetch(ACCOUNTS_URL, identityRoute('/session?via=id_token', '/token?grant_type=id_token'), {
 		method: 'POST',
-		headers: { apikey: APP_KEY, 'Content-Type': 'application/json' },
+		key: APP_KEY,
+		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ provider: 'google', id_token: idToken, nonce: rawNonce })
 	});
 	if (!response.ok) {
@@ -562,9 +565,10 @@ async function ssoAuthorizeUrl(parts: {
 	redirectTo: string;
 	challenge: string;
 }): Promise<string> {
-	const response = await fetch(`${ACCOUNTS_URL}/v1/identity/sso/start`, {
+	const response = await doorFetch(ACCOUNTS_URL, identityRoute('/sso/start', '/sso'), {
 		method: 'POST',
-		headers: { apikey: APP_KEY, 'Content-Type': 'application/json' },
+		key: APP_KEY,
+		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({
 			domain: parts.domain,
 			redirect_to: parts.redirectTo,
@@ -731,8 +735,8 @@ async function signIn(options: {
 		callbackPath: '/callback',
 		timeoutMs: options.timeoutMs,
 		noBrowser: options.noBrowser,
-		authorizeUrl: (redirect) => {
-			const authorize = new URL(`${ACCOUNTS_URL}/v1/identity/provider/start`);
+		authorizeUrl: async (redirect) => {
+			const authorize = new URL(await browserUrl(ACCOUNTS_URL, identityRoute('/provider/start', '/authorize'), APP_KEY));
 			authorize.searchParams.set('provider', provider);
 			authorize.searchParams.set('redirect_to', redirect);
 			authorize.searchParams.set('code_challenge', challenge);

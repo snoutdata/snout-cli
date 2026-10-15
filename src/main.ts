@@ -143,7 +143,7 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata secrets list                   names and sizes; values are never readable
   snoutdata secrets unset NAME
 
-  snoutdata keys [--ref R]                 the app and server API keys
+  snoutdata keys [--ref R]                 the app key and server key
   snoutdata keys rotate --force [--ref R]  new ones, breaking every key already issued
 
   snoutdata teams                          teams you can share a project with

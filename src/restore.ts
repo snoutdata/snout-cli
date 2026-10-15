@@ -148,14 +148,14 @@ export function classifyRestoreErrors(stderr: string): RestoreErrors {
 /**
  * What to restore from an archive of OURS into a project of ours, and in which order.
  *
- * An export carries the platform's own objects as well as the customer's: the `auth`,
- * `storage`, `push` and Realtime schemas with their functions, triggers and policies, the
+ * An export carries the platform's own objects as well as the customer's: the identity,
+ * files, `push` and live schemas with their functions, triggers and policies, the
  * pod's event triggers, the extension schemas, the Realtime publication. Every project the
  * platform makes already has them, so restoring them failed by the dozen (85 errors and a
  * "half-finished restore" verdict on a restore whose data was all there, 2026-10-02); and
  * where a product was OFF in the target the restore CREATED its tables, owned by the
  * customer's role, so switching that product on afterwards crashed it: snout-auth could not
- * read `snout_identity.schema_migrations`.
+ * read its `schema_migrations`.
  *
  * So the platform's objects are never restored; only their ROWS are, into the tables the
  * platform made, which is why a dump holding auth, storage or push data needs that product on
@@ -204,12 +204,14 @@ export interface RestorePlan {
 const PLATFORM_OWNER = /^(snoutpod_admin|snout_[a-z]+_admin)$/;
 /** Schemas every project is given, whose objects only the platform makes. */
 const PLATFORM_SCHEMAS = new Set([
-	'auth', 'storage', 'push', 'realtime', 'snout_realtime', '_realtime', 'graphql', 'snout_graph',
-	'extensions', 'net', 'cron', 'pgbouncer', 'vault', 'pgsodium'
+	'snout_identity', 'snout_files', 'push', 'snout_live', 'snout_realtime', '_realtime', 'graphql', 'snout_graph',
+	'snout_ext', 'net', 'cron', 'pgbouncer', 'vault', 'pgsodium',
+	// The same schemas in a database made before they had these names.
+	'auth', 'storage', 'realtime', 'snout_graph', 'extensions'
 ]);
 /** Objects the platform puts in `public` or in no schema. */
 const PLATFORM_NAMES = /^(pgrst_ddl_watch|pgrst_drop_watch|snoutpod_[a-z_]+|snoutdata_realtime|snout_realtime_messages)(\(|$)/;
-const PRODUCT_SCHEMAS: Readonly<Record<string, PlatformProduct>> = { auth: 'auth', storage: 'storage', push: 'push' };
+const PRODUCT_SCHEMAS: Readonly<Record<string, PlatformProduct>> = { snout_identity: 'auth', snout_files: 'storage', auth: 'auth', storage: 'storage', push: 'push' };
 /** Tables a product fills when it is switched on (`push.settings` is one row of defaults). */
 const SEEDED = new Set(['push.settings']);
 /** `pg_restore --list` types of more than one word; any other type is its first word. */
@@ -280,7 +282,7 @@ export function planRestore(toc: string, postData: string): RestorePlan {
 		const { type, schema, name, owner } = entry;
 		if (type === 'TABLE DATA' || type === 'SEQUENCE SET') {
 			const bookkeeping = /^(schema_migrations|migrations)$/.test(name) && PLATFORM_SCHEMAS.has(schema);
-			if (/realtime/.test(schema) || bookkeeping || (schema === 'public' && name === 'spatial_ref_sys')) {
+			if (/realtime/.test(schema) || schema === 'snout_live' || bookkeeping || (schema === 'public' && name === 'spatial_ref_sys')) {
 				skipped++;
 				continue;
 			}
@@ -296,7 +298,7 @@ export function planRestore(toc: string, postData: string): RestorePlan {
 			}
 			const product = PRODUCT_SCHEMAS[schema];
 			if (product) {
-				if (product === 'storage' && name === 'objects') {
+				if (product === 'storage' && (name === 'objects' || name === 'files')) {
 					notes.add('Storage objects are restored as rows; the files themselves are not part of an export. Upload them again into this project.');
 				}
 				platformData.set(product, [...(platformData.get(product) ?? []), entry]);

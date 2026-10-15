@@ -17,11 +17,11 @@ import { explainNoHuman, noHumanReason } from './interactive.js';
 import { climb } from './ladder.js';
 import { warn } from './output.js';
 import { CLIENT_INFO, VERSION, outdatedAdvice } from './version.js';
+import { doorFetch, fnRoute, identityRoute } from './layout.js';
 
 export const ACCOUNTS_URL = process.env.SNOUTDATA_ACCOUNTS_URL ?? 'https://accounts.snoutdata.com';
 export const APP_KEY =
-	process.env.SNOUTDATA_APP_KEY ?? 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzbm91dGRhdGEiLCJyZWYiOiJ6ZjdnNjVtYjhmYXJhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4MDcwNDcsImV4cCI6MjEwNDg3NTUyNH0.M-Cb0wFEhJXU21cXtQxZAn-WnRcq4rK2uNSkeHdLucY';
-export const FUNCTIONS = `${ACCOUNTS_URL}/v1/fn`;
+	process.env.SNOUTDATA_APP_KEY ?? process.env.SNOUTDATA_APP_KEY ?? 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzbm91dGRhdGEiLCJyZWYiOiJ6ZjdnNjVtYjhmYXJhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4MDcwNDcsImV4cCI6MjEwNDg3NTUyNH0.M-Cb0wFEhJXU21cXtQxZAn-WnRcq4rK2uNSkeHdLucY';
 
 export class ApiError extends Error {
 	readonly status: number;
@@ -145,9 +145,10 @@ async function currentToken(): Promise<string> {
 	if (!isExpired(auth) || !auth.refreshToken) {
 		return auth.accessToken;
 	}
-	const response = await fetch(`${ACCOUNTS_URL}/v1/identity/session?via=renew`, {
+	const response = await doorFetch(ACCOUNTS_URL, identityRoute('/session?via=renew', '/token?grant_type=refresh_token'), {
 		method: 'POST',
-		headers: { apikey: APP_KEY, 'Content-Type': 'application/json' },
+		key: APP_KEY,
+		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ refresh_token: auth.refreshToken })
 	});
 	if (!response.ok) {
@@ -194,11 +195,11 @@ export async function call<T>(
 		method === 'GET' && typeof body === 'object' && body
 			? `?${new URLSearchParams(body as Record<string, string>).toString()}`
 			: '';
-	const response = await fetch(`${FUNCTIONS}/${fn}${query}`, {
+	const response = await doorFetch(ACCOUNTS_URL, fnRoute(fn, query), {
 		method,
+		key: APP_KEY,
 		headers: {
 			Authorization: `Bearer ${token}`,
-			apikey: APP_KEY,
 			'Content-Type': 'application/json',
 			// Who the audit log says did it. A signed-in CLI holds the same session JWT a browser
 			// does, so without this everything it did read "You" and the log's CLI filter only
@@ -297,7 +298,16 @@ export async function connection(ref: string): Promise<Connection> {
 	if (stack) {
 		return localConnection(stack);
 	}
-	return call('cloud-project-connection', { ref });
+	return withKeyNames(await call<Connection>('cloud-project-connection', { ref }));
+}
+
+/**
+ * The two API keys under their names here (`appKey`, `serverKey`), from an answer that may carry
+ * them under the names a control plane older than them sends (`appKey`, `serverKey`).
+ */
+export function withKeyNames<T extends { appKey?: string | null; serverKey?: string | null }>(answer: T): T & { appKey: string | null; serverKey: string | null } {
+	const { appKey, serverKey, ...rest } = answer as T & { appKey?: string | null; serverKey?: string | null };
+	return { ...(rest as T), appKey: answer.appKey ?? appKey ?? null, serverKey: answer.serverKey ?? serverKey ?? null };
 }
 
 /** The local stack this ref names, if it names one: the folder linked here, then Studio's list. */
