@@ -21,7 +21,7 @@ import { doorFetch, fnRoute, identityRoute } from './layout.js';
 
 export const ACCOUNTS_URL = process.env.SNOUTDATA_ACCOUNTS_URL ?? 'https://accounts.snoutdata.com';
 export const APP_KEY =
-	process.env.SNOUTDATA_APP_KEY ?? process.env.SNOUTDATA_ANON_KEY ?? 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzbm91dGRhdGEiLCJyZWYiOiJ6ZjdnNjVtYjhmYXJhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4MDcwNDcsImV4cCI6MjEwNDg3NTUyNH0.M-Cb0wFEhJXU21cXtQxZAn-WnRcq4rK2uNSkeHdLucY';
+	process.env.SNOUTDATA_APP_KEY ?? process.env.SNOUTDATA_ANON_KEY ?? 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzbm91dGRhdGEiLCJyb2xlIjoic25vdXRfYXBwIiwiaWF0IjoxNzkyMDc2NTQyLCJleHAiOjIxMDQ4NzU1MjR9.hWSbcDfbGuyDHHSFLoZzD8KVSg9bWVZzzQ_eftW6TPM';
 
 export class ApiError extends Error {
 	readonly status: number;
