@@ -5,7 +5,7 @@
  * Before this there was nowhere to look. "A friend disappeared from the game" could only be
  * answered by adding logging to the game and reproducing it with a bot client, while the
  * server knew exactly when that socket went and why. It now keeps the channels open, who is
- * on each, their presence, the last minute of messages, and a bounded log of connections
+ * on each, the roster, the last minute of messages, and a bounded log of connections
  * coming and going with the reason each one ended (snout-realtime's `inspect.rs`), and
  * `cloud-project-realtime` hands both to the project's owner.
  *
@@ -172,7 +172,7 @@ function printSnapshot(answer: RealtimeAnswer): void {
 		);
 		say(
 			dim(
-				`  last ${m.window_seconds}s: ${m.broadcasts_received} broadcast${m.broadcasts_received === 1 ? '' : 's'} sent, ${m.broadcasts_delivered} delivered, busiest second ${m.peak_broadcasts_per_second}; ${m.presence_diffs_delivered} presence update${m.presence_diffs_delivered === 1 ? '' : 's'} delivered`
+				`  last ${m.window_seconds}s: ${m.broadcasts_received} signal${m.broadcasts_received === 1 ? '' : 's'} sent, ${m.broadcasts_delivered} delivered, busiest second ${m.peak_broadcasts_per_second}; ${m.presence_diffs_delivered} roster update${m.presence_diffs_delivered === 1 ? '' : 's'} delivered`
 			)
 		);
 		if (channel.clients.length > 0) {
@@ -184,7 +184,7 @@ function printSnapshot(answer: RealtimeAnswer): void {
 					(client.last_seen_ms_ago !== null && client.last_seen_ms_ago > SILENT_MS ? '  (silent: likely gone)' : '')
 			]);
 			say(
-				table([['SOCKET', 'PRESENCE KEY', 'JOINED', 'LAST HEARD'], ...rows])
+				table([['SOCKET', 'ROSTER KEY', 'JOINED', 'LAST HEARD'], ...rows])
 					.split('\n')
 					.map((line) => `  ${line}`)
 					.join('\n')
@@ -192,7 +192,7 @@ function printSnapshot(answer: RealtimeAnswer): void {
 		}
 		const keys = Object.keys(channel.presence);
 		if (keys.length > 0) {
-			say('  presence:');
+			say('  roster:');
 			for (const key of keys) {
 				for (const meta of channel.presence[key]!.metas) {
 					say(`    ${key}  ${describeMeta(meta)}`);

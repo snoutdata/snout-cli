@@ -41,7 +41,7 @@ export const COMMANDS = [
 	{ name: 'auth redirects', summary: 'The site URL and the addresses a sign-in may return to', flags: ['--ref', '--site-url', '--allow'] },
 	{ name: 'auth templates', summary: 'The five auth emails, ours or your own', flags: ['--ref'] },
 	{ name: 'auth template', args: 'KIND', summary: 'Use your own subject and HTML for one, or reset it', flags: ['--ref', '--file', '--subject'] },
-	{ name: 'realtime inspect', summary: 'The channels open now: each client, its presence, when it was last heard, and the last minute of messages', flags: ['--channel', '--watch', '--ref'] },
+	{ name: 'realtime inspect', summary: 'The channels open now: each client, its roster entry, when it was last heard, and the last minute of messages', flags: ['--channel', '--watch', '--ref'] },
 	{ name: 'realtime logs', summary: 'The connection log: connects, joins, leaves and disconnects, with the reason each ended', flags: ['--since', '--channel', '--ref'] },
 	{ name: 'domains', summary: 'Your own domains in front of the project API', flags: ['--ref'] },
 	{ name: 'domains add', args: '<hostname>', summary: 'Add one, and print the DNS records to publish', flags: ['--ref'] },

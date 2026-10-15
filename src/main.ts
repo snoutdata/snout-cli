@@ -104,7 +104,7 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata auth template KIND --file body.html [--subject S] | reset
 
   snoutdata realtime inspect [--channel C] [--watch] [--ref R]
-                                           channels open now: who, their presence, the last minute
+                                           channels open now: who, the roster, the last minute
   snoutdata realtime logs [--since 10m] [--channel C] [--ref R]
                                            connects, joins, leaves and disconnects, with why
 
