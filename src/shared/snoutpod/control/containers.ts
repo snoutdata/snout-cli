@@ -5,8 +5,9 @@
  * agent. A container is one image of the customer's that runs for as long as the project does,
  * under gVisor, reachable at `/containers/v1/<name>/` on the project's API address.
  *
- * Pure. The one impure step, asking a registry what a tag points at, takes `fetch` as an argument,
- * so the same code resolves a digest in a Snout Function and in a test against a fake registry.
+ * Pure. The one impure step, asking a registry what a tag points at, takes `fetch` and a DNS
+ * resolver as arguments, so the same code resolves a digest in a Snout Function and in a test
+ * against a fake registry, and only ever asks the public internet (`RegistryNetwork`).
  *
  * What lives here:
  *   - the name rule (a URL segment, a podman container name and part of a systemd unit name);
@@ -198,12 +199,284 @@ const MANIFEST_ACCEPT = [
 	'application/vnd.docker.distribution.manifest.v2+json'
 ].join(', ');
 
-type Fetch = (input: string, init?: { method?: string; headers?: Record<string, string> }) => Promise<{
+type Fetch = (
+	input: string,
+	init?: { method?: string; headers?: Record<string, string>; redirect?: 'manual' }
+) => Promise<{
 	status: number;
 	headers: { get(name: string): string | null };
 	text(): Promise<string>;
 	arrayBuffer(): Promise<ArrayBuffer>;
 }>;
+
+// ------------------------------------------------------------------------------
+// Where a registry may be: the public internet, over https, on 443
+// ------------------------------------------------------------------------------
+
+/**
+ * A deploy names the registry, so without this the control plane would GET any host the caller
+ * chose, follow that host's `WWW-Authenticate` realm to any URL, and hand the status back in the
+ * error: a blind SSRF and port probe from the control plane's own egress (security check,
+ * 2026-10-15). So every URL this module fetches, the registry, its token realm and every redirect
+ * hop, is checked first:
+ *
+ *   - `https:` on 443 only (`KNOWN_REGISTRY_PORTS` is where a known registry on another port would
+ *     be allowed; it is empty, because none needs one);
+ *   - the host, as the WHATWG URL parser reads it (so `2130706433`, `0x7f.1` and `127.1` are the
+ *     loopback they are), resolved to EVERY address it has, and each one public: never loopback,
+ *     private, link-local (169.254/16, the metadata service), CGNAT, multicast, reserved,
+ *     documentation, unique-local or link-local IPv6, or an IPv4 range hidden in IPv6;
+ *   - a token realm, in addition, on the registry's own registrable domain or a known token host;
+ *   - redirects followed by hand (at most `MAX_REDIRECTS`), each hop checked again, with the
+ *     credential dropped when one leaves the registry's origin.
+ *
+ * And whatever went wrong on the way, the caller reads `REGISTRY_UNREACHABLE` and nothing more: no
+ * status, no exception text, so a refused address and a closed port read the same.
+ *
+ * The network the caller runs on is a second layer, not a replacement: a name can be rebound
+ * between this lookup and the fetch's own, and no fetch API here lets the address be pinned. What
+ * that layer is for the control plane is written where the resolver is handed in (the
+ * `cloud-project-containers` function), since it is a fact about that deployment, not about this.
+ */
+
+/** What the caller reads for anything refused or failed on the way to a registry. */
+export const REGISTRY_UNREACHABLE = 'the registry could not be reached.';
+
+/** A known registry that answers on a port other than 443, host to ports. None does today. */
+export const KNOWN_REGISTRY_PORTS: Readonly<Record<string, readonly number[]>> = {};
+
+/** Hosts a token realm may be on whatever the registry is called (`*.` is any subdomain). */
+export const KNOWN_TOKEN_HOSTS: readonly string[] = [
+	'auth.docker.io',
+	'ghcr.io',
+	'*.amazonaws.com',
+	'gcr.io',
+	'*.gcr.io',
+	'*.pkg.dev',
+	'quay.io',
+	'registry.gitlab.com',
+	'gitlab.com'
+];
+
+export const MAX_REDIRECTS = 5;
+
+/**
+ * How a registry's addresses are found. `resolve` answers every A and AAAA address of a host name
+ * (an empty list, or a throw, is "cannot be reached"). `'trusted'` skips the address check and is
+ * only for a registry that is OURS, never one a deploy named (the host agent checking its own copy).
+ */
+export type RegistryNetwork = { resolve(host: string): Promise<readonly string[]> } | 'trusted';
+
+class Unreachable extends Error {}
+
+function parseIPv4(text: string): number[] | null {
+	const parts = text.split('.');
+	if (parts.length !== 4) {
+		return null;
+	}
+	const out: number[] = [];
+	for (const part of parts) {
+		if (!/^\d{1,3}$/.test(part)) {
+			return null;
+		}
+		const n = Number(part);
+		if (n > 255) {
+			return null;
+		}
+		out.push(n);
+	}
+	return out;
+}
+
+/** Eight 16-bit groups, or null. Accepts `::` and a dotted IPv4 tail (`::ffff:1.2.3.4`). */
+function parseIPv6(text: string): number[] | null {
+	let s = text.replace(/^\[|\]$/g, '');
+	const zone = s.indexOf('%');
+	if (zone !== -1) {
+		s = s.slice(0, zone);
+	}
+	if (!/^[0-9a-fA-F:.]+$/.test(s) || !s.includes(':')) {
+		return null;
+	}
+	const lastColon = s.lastIndexOf(':');
+	if (s.slice(lastColon + 1).includes('.')) {
+		const v4 = parseIPv4(s.slice(lastColon + 1));
+		if (!v4) {
+			return null;
+		}
+		s = `${s.slice(0, lastColon + 1)}${((v4[0]! << 8) | v4[1]!).toString(16)}:${((v4[2]! << 8) | v4[3]!).toString(16)}`;
+	}
+	const halves = s.split('::');
+	if (halves.length > 2) {
+		return null;
+	}
+	const groups = (half: string) => (half === '' ? [] : half.split(':'));
+	const head = groups(halves[0] ?? '');
+	const rest = halves.length === 2 ? groups(halves[1] ?? '') : [];
+	if ([...head, ...rest].some((g) => !/^[0-9a-fA-F]{1,4}$/.test(g))) {
+		return null;
+	}
+	const known = head.length + rest.length;
+	if (halves.length === 1 ? known !== 8 : known > 7) {
+		return null;
+	}
+	const zeros = new Array<number>(8 - known).fill(0);
+	return [...head.map((g) => parseInt(g, 16)), ...zeros, ...rest.map((g) => parseInt(g, 16))];
+}
+
+function inV4(ip: number[], base: string, bits: number): boolean {
+	const b = parseIPv4(base) as number[];
+	const value = (a: number[]) => ((a[0]! << 24) | (a[1]! << 16) | (a[2]! << 8) | a[3]!) >>> 0;
+	const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+	return (value(ip) & mask) === (value(b) & mask);
+}
+
+/** Not the public internet: special-purpose ranges (RFC 6890 and successors). */
+const V4_NOT_PUBLIC: readonly [string, number][] = [
+	['0.0.0.0', 8],
+	['10.0.0.0', 8],
+	['100.64.0.0', 10],
+	['127.0.0.0', 8],
+	['169.254.0.0', 16],
+	['172.16.0.0', 12],
+	['192.0.0.0', 24],
+	['192.0.2.0', 24],
+	['192.88.99.0', 24],
+	['192.168.0.0', 16],
+	['198.18.0.0', 15],
+	['198.51.100.0', 24],
+	['203.0.113.0', 24],
+	['224.0.0.0', 4],
+	['240.0.0.0', 4]
+];
+
+function isPublicV4(ip: number[]): boolean {
+	return !V4_NOT_PUBLIC.some(([base, bits]) => inV4(ip, base, bits));
+}
+
+function isPublicV6(g: number[]): boolean {
+	// IPv4-mapped (::ffff:0:0/96) and the deprecated IPv4-compatible (::/96): judged as the IPv4.
+	if (g.slice(0, 5).every((x) => x === 0) && (g[5] === 0xffff || g[5] === 0)) {
+		if (g[5] === 0 && g[6] === 0 && (g[7] === 0 || g[7] === 1)) {
+			return false; // `::` and `::1`
+		}
+		return isPublicV4([g[6]! >> 8, g[6]! & 0xff, g[7]! >> 8, g[7]! & 0xff]);
+	}
+	// Only global unicast (2000::/3) is the internet, and inside it: documentation (2001:db8::/32),
+	// Teredo and the other 2001::/23 protocol assignments, 6to4 (2002::/16), which hide an IPv4
+	// address we would otherwise have to judge, are refused outright. 64:ff9b::/96 (NAT64) and
+	// fc00::/7, fe80::/10, ff00::/8 fall outside 2000::/3.
+	if ((g[0]! & 0xe000) !== 0x2000) {
+		return false;
+	}
+	if (g[0] === 0x2001 && (g[1]! < 0x0200 || g[1] === 0x0db8)) {
+		return false;
+	}
+	return g[0] !== 0x2002;
+}
+
+/** True when `address` (an IPv4 or IPv6 literal) is on the public internet. Anything else is false. */
+export function isPublicAddress(address: string): boolean {
+	const v4 = parseIPv4(address);
+	if (v4) {
+		return isPublicV4(v4);
+	}
+	const v6 = parseIPv6(address);
+	return v6 ? isPublicV6(v6) : false;
+}
+
+/** Two-label public suffixes common enough to matter for "the same registrable domain". */
+const TWO_LEVEL_SUFFIXES = new Set([
+	'co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'com.au', 'net.au', 'org.au', 'co.nz', 'co.jp', 'ne.jp', 'or.jp',
+	'com.br', 'com.cn', 'com.hk', 'com.sg', 'com.tw', 'co.in', 'co.kr', 'co.za', 'com.mx', 'com.ar', 'com.tr'
+]);
+
+/** `registry-1.docker.io` → `docker.io`; `cr.acme.co.uk` → `acme.co.uk`. Without the full list, so approximate. */
+export function registrableDomain(host: string): string {
+	const labels = host.toLowerCase().replace(/\.$/, '').split('.');
+	const take = labels.length >= 3 && TWO_LEVEL_SUFFIXES.has(labels.slice(-2).join('.')) ? 3 : 2;
+	return labels.slice(-take).join('.');
+}
+
+function matchesHost(host: string, pattern: string): boolean {
+	return pattern.startsWith('*.') ? host.endsWith(pattern.slice(1)) : host === pattern;
+}
+
+/** Whether a token realm on `realmHost` may be asked for a token on behalf of `registryHost`. */
+export function isAllowedRealmHost(realmHost: string, registryHost: string): boolean {
+	const realm = realmHost.toLowerCase();
+	return registrableDomain(realm) === registrableDomain(registryHost) || KNOWN_TOKEN_HOSTS.some((p) => matchesHost(realm, p));
+}
+
+/**
+ * Throws `Unreachable` unless `url` is https on an allowed port and every address of its host is
+ * public. The host is read by the URL parser, which is what the fetch will connect to.
+ */
+async function checkRegistryUrl(url: URL, network: RegistryNetwork): Promise<void> {
+	if (url.protocol !== 'https:' || url.username || url.password) {
+		throw new Unreachable();
+	}
+	const host = url.hostname.toLowerCase();
+	if (url.port !== '' && !(KNOWN_REGISTRY_PORTS[host] ?? []).includes(Number(url.port))) {
+		throw new Unreachable();
+	}
+	if (network === 'trusted') {
+		return;
+	}
+	if (parseIPv4(host) || host.startsWith('[')) {
+		if (!isPublicAddress(host)) {
+			throw new Unreachable();
+		}
+		return;
+	}
+	let addresses: readonly string[];
+	try {
+		addresses = await network.resolve(host);
+	} catch {
+		throw new Unreachable();
+	}
+	if (addresses.length === 0 || !addresses.every(isPublicAddress)) {
+		throw new Unreachable();
+	}
+}
+
+/** One GET with every redirect followed by hand and checked; the credential stays on its origin. */
+async function guardedGet(
+	start: URL,
+	headers: Record<string, string>,
+	fetcher: Fetch,
+	network: RegistryNetwork
+): Promise<Awaited<ReturnType<Fetch>>> {
+	let url = start;
+	const sent = { ...headers };
+	for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+		await checkRegistryUrl(url, network);
+		let response;
+		try {
+			response = await fetcher(url.toString(), { headers: sent, redirect: 'manual' });
+		} catch {
+			throw new Unreachable();
+		}
+		if (![301, 302, 303, 307, 308].includes(response.status)) {
+			return response;
+		}
+		const location = response.headers.get('location');
+		if (!location) {
+			throw new Unreachable();
+		}
+		let next: URL;
+		try {
+			next = new URL(location, url);
+		} catch {
+			throw new Unreachable();
+		}
+		if (next.origin !== url.origin) {
+			delete sent.authorization;
+		}
+		url = next;
+	}
+	throw new Unreachable();
+}
 
 interface Challenge {
 	readonly scheme: string;
@@ -241,16 +514,20 @@ async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
  * A client for one repository on one registry, which gets a token when the registry asks for one
  * and keeps it for the next request (a manifest then a config blob is the common pair).
  */
-function registryClient(ref: ImageReference, credential: RegistryCredential | null, fetcher: Fetch) {
-	const base = registryApiBase(ref.registry);
+function registryClient(ref: ImageReference, credential: RegistryCredential | null, fetcher: Fetch, network: RegistryNetwork) {
+	const base = new URL(`${registryApiBase(ref.registry)}/v2/${ref.repository}/`);
 	let authorization: string | null = null;
+
+	function at(path: string): URL {
+		return new URL(path, base);
+	}
 
 	async function get(path: string, accept: string) {
 		const headers: Record<string, string> = { accept };
 		if (authorization) {
 			headers.authorization = authorization;
 		}
-		let response = await fetcher(`${base}/v2/${ref.repository}/${path}`, { headers });
+		let response = await guardedGet(at(path), headers, fetcher, network);
 		if (response.status !== 401 || authorization) {
 			return response;
 		}
@@ -261,7 +538,17 @@ function registryClient(ref: ImageReference, credential: RegistryCredential | nu
 			}
 			authorization = basic(credential);
 		} else if (challenge?.scheme === 'bearer' && challenge.params.realm) {
-			const realm = new URL(challenge.params.realm);
+			// The realm is the registry's word, so it is held to the registry's rules and one more:
+			// it is on the registry's own domain or a known token host, never wherever it points.
+			let realm: URL;
+			try {
+				realm = new URL(challenge.params.realm);
+			} catch {
+				throw new Unreachable();
+			}
+			if (!isAllowedRealmHost(realm.hostname, base.hostname)) {
+				throw new Unreachable();
+			}
 			if (challenge.params.service) {
 				realm.searchParams.set('service', challenge.params.service);
 			}
@@ -270,22 +557,25 @@ function registryClient(ref: ImageReference, credential: RegistryCredential | nu
 			if (credential) {
 				tokenHeaders.authorization = basic(credential);
 			}
-			const tokenResponse = await fetcher(realm.toString(), { headers: tokenHeaders });
+			const tokenResponse = await guardedGet(realm, tokenHeaders, fetcher, network);
 			if (tokenResponse.status !== 200) {
 				return response;
 			}
-			const body = JSON.parse(await tokenResponse.text()) as { token?: string; access_token?: string };
-			const token = body.token ?? body.access_token;
-			if (!token) {
+			let token: string | undefined;
+			try {
+				const body = JSON.parse(await tokenResponse.text()) as { token?: string; access_token?: string };
+				token = body.token ?? body.access_token;
+			} catch {
+				token = undefined;
+			}
+			if (typeof token !== 'string' || token === '') {
 				return response;
 			}
 			authorization = `Bearer ${token}`;
 		} else {
 			return response;
 		}
-		response = await fetcher(`${base}/v2/${ref.repository}/${path}`, {
-			headers: { accept, authorization }
-		});
+		response = await guardedGet(at(path), { accept, authorization }, fetcher, network);
 		return response;
 	}
 
@@ -334,17 +624,28 @@ function platformName(p: { os?: string; architecture?: string; variant?: string 
 export async function resolveImage(
 	ref: ImageReference,
 	credential: RegistryCredential | null,
-	fetcher: Fetch
+	fetcher: Fetch,
+	network: RegistryNetwork
+): Promise<ResolvedImage> {
+	try {
+		return await resolveChecked(ref, credential, fetcher, network);
+	} catch {
+		// A refused address, a refused realm or redirect, a network error, a body that would not
+		// read: one sentence for all of them, so none of them is an oracle (see REGISTRY_UNREACHABLE).
+		return { ok: false, reason: REGISTRY_UNREACHABLE };
+	}
+}
+
+async function resolveChecked(
+	ref: ImageReference,
+	credential: RegistryCredential | null,
+	fetcher: Fetch,
+	network: RegistryNetwork
 ): Promise<ResolvedImage> {
 	const shown = formatImageReference(ref);
-	const client = registryClient(ref, credential, fetcher);
+	const client = registryClient(ref, credential, fetcher, network);
 	const wanted = ref.digest ?? ref.tag ?? 'latest';
-	let response;
-	try {
-		response = await client.get(`manifests/${wanted}`, MANIFEST_ACCEPT);
-	} catch (error) {
-		return { ok: false, reason: `could not reach ${ref.registry}: ${(error as Error).message}` };
-	}
+	const response = await client.get(`manifests/${wanted}`, MANIFEST_ACCEPT);
 	if (response.status === 401 || response.status === 403) {
 		return {
 			ok: false,
@@ -360,7 +661,7 @@ export async function resolveImage(
 		return { ok: false, reason: `${ref.registry} is rate limiting pulls right now; try again in a minute.` };
 	}
 	if (response.status !== 200) {
-		return { ok: false, reason: `${ref.registry} answered ${response.status} for ${shown}.` };
+		return { ok: false, reason: REGISTRY_UNREACHABLE };
 	}
 	const raw = await response.arrayBuffer();
 	const headerDigest = response.headers.get('docker-content-digest');
@@ -389,7 +690,7 @@ export async function resolveImage(
 			}
 			const child = await client.get(`manifests/${ours.digest}`, MANIFEST_ACCEPT);
 			if (child.status !== 200) {
-				return { ok: false, reason: `${ref.registry} would not serve the linux/arm64 image of ${shown} (${child.status}).` };
+				return { ok: false, reason: `${ref.registry} would not serve the linux/arm64 image of ${shown}.` };
 			}
 			try {
 				bytes = imageBytes(JSON.parse(await child.text()) as ManifestBody);
@@ -400,7 +701,7 @@ export async function resolveImage(
 	} else if (body.config?.digest) {
 		const config = await client.get(`blobs/${body.config.digest}`, '*/*');
 		if (config.status !== 200) {
-			return { ok: false, reason: `${ref.registry} would not serve the configuration of ${shown} (${config.status}).` };
+			return { ok: false, reason: `${ref.registry} would not serve the configuration of ${shown}.` };
 		}
 		try {
 			const parsed = JSON.parse(await config.text()) as { os?: string; architecture?: string; variant?: string };
