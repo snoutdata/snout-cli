@@ -25,7 +25,7 @@ export interface Products {
 	dataApi: { enabled: boolean; allowedOnPlan: boolean } | { error: string };
 	push: { enabled: boolean; scheduling: boolean } | { error: string };
 	/**
-	 * Realtime has no switch: broadcast and presence are on for every project from the moment it
+	 * Realtime has no switch: signals and the roster are on for every project from the moment it
 	 * exists. It is listed anyway, because a list of products that leaves it out reads as "nothing
 	 * is on" to somebody whose game is using it right now.
 	 */
@@ -98,7 +98,7 @@ export async function productsCommand(ref: string): Promise<void> {
 			line('storage', storage, 'pending' in storage && storage.pending ? 'waiting for the host' : ''),
 			line('data-api', dataApi, 'allowedOnPlan' in dataApi && !dataApi.allowedOnPlan ? 'not on this plan' : ''),
 			line('push', answer.push, 'scheduling' in answer.push && answer.push.enabled && !answer.push.scheduling ? 'scheduled sends on paid plans' : ''),
-			line('realtime', answer.realtime, 'always on: broadcast, presence; table changes on Plus and Pro'),
+			line('realtime', answer.realtime, 'always on: signals, roster; table changes on Plus and Pro'),
 		])}\n`);
 		// The hint names a product that is actually OFF, or nothing: it used to say "enable
 		// storage" on a project where all four were already on.
@@ -269,7 +269,7 @@ export async function showCommand(ref: string): Promise<void> {
 			// said "unknown" would be a guess dressed as an answer.
 			...(typeof p.postgresVersion === 'number' ? [['postgres', String(p.postgresVersion)]] : []),
 			['auth / storage / data-api / push', `${on(p.products.auth)} / ${on(p.products.storage)} / ${on(p.products.dataApi)} / ${on(p.products.push)}`],
-			['realtime', 'on (broadcast and presence; table changes on Plus and Pro)'],
+			['realtime', 'on (signals and the roster; table changes on Plus and Pro)'],
 			['functions', list(p.functions)],
 			['secrets', list(p.secretNames)],
 			['domains', list(p.domains)],
