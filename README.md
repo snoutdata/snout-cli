@@ -131,6 +131,11 @@ snoutdata db push [--dir migrations] [--dry-run]  # run the .sql files, once eac
 snoutdata db restore --file DUMP [--force]
 ```
 
+`db push` needs nothing installed: it connects to the database itself and sends each file a
+statement at a time, cut where `psql` would cut it. A file holding a `psql` command (`\i`, `\set`)
+is refused before anything runs. `db psql`, `db restore` and `gen types` use the Postgres client
+tools.
+
 `db psql`, `db push`, `db restore` and `gen types` verify the database's certificate
 (`sslmode=verify-full`, against Node's trusted roots). `SNOUTDATA_DB_SSLMODE=require` turns the
 check off, for a network that re-signs Postgres traffic.

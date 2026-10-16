@@ -19,9 +19,10 @@
  * `USER-DEFINED` and `ARRAY` — so enums come out as enums rather than as `unknown`. It is one
  * query and it holds no lock.
  *
- * **It runs through `psql`, for the same reason `db push` does.** The published CLI has no
- * dependencies at all, which is most of why `npx snoutdata` is fast; adding `pg` to it to run
- * one read-only query would be a poor trade. The error when psql is missing says so plainly.
+ * **It runs through `psql`.** The published CLI has no dependencies at all, which is most of why
+ * `npx snoutdata` is fast; adding `pg` to it to run one read-only query would be a poor trade.
+ * The error when psql is missing says so plainly. (`db push` stopped needing psql in 0.17.4 by
+ * speaking the protocol itself, `pgWire.ts`; this could do the same the day it is worth it.)
  *
  * **Except for a hosted project, which does not need it.** The query is one read that answers one
  * JSON value, which is exactly what `cloud-project-sql` (the dashboard's SQL editor) carries, with
@@ -137,8 +138,7 @@ export function targetFromUrl(url: string): Target {
  * failure a non-zero exit instead of a message scrolling past a "success", and `-tA` makes the
  * output parseable rather than drawn.
  *
- * Exported because `local.ts` needs exactly this and a third copy of it would be one too many.
- * It belongs in a `psql.ts` beside `push.ts` the day somebody moves `push.ts`'s copy as well.
+ * Exported because `local.ts` needs exactly this and a second copy of it would be one too many.
  */
 export function runPsql(target: Target, sql: string): Promise<{ code: number; out: string; err: string }> {
 	return new Promise((done) => {

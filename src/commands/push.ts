@@ -8,13 +8,15 @@
  *
  * ## Two choices worth knowing about
  *
- * **It runs through `psql`, not through the control plane.** `cloud-project-sql` exists
- * and the dashboard's editor uses it, but it refuses DDL, which is what a migration IS.
+ * **It connects to the database itself, not through the control plane.** `cloud-project-sql`
+ * exists and the dashboard's editor uses it, but it refuses DDL, which is what a migration IS.
  * A migration is an ordinary client connecting to an ordinary Postgres, so this is an
- * ordinary connection: credentials fetched because you are signed in, the password
- * handed over in the child's environment and never on a command line. The cost is that
- * `psql` has to be installed, and the error says so plainly, the way `db psql` already
- * does.
+ * ordinary connection: credentials fetched because you are signed in, TLS verified as
+ * `pgTls.ts` says. Until 0.17.4 that client was `psql`, which had to be installed; now it is
+ * the CLI's own (`pgWire.ts`), and a file is cut into statements by psql's rules
+ * (`sqlScript.ts`) and sent one at a time as psql sent them, each migration on a connection
+ * of its own as each psql was. The one thing psql did that this cannot is a psql
+ * meta-command (`\i`, `\set`), and a file holding one is refused before anything runs.
  *
  * **The ledger row is written in the SAME transaction as the migration.** That is the
  * whole reason for wrapping: a file that fails half way leaves nothing behind, and there
@@ -25,15 +27,15 @@
  * the only place that can never disagree with the schema it describes.
  */
 
-import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative as relativePath, resolve } from 'node:path';
 import { connection, type Connection } from '../api.js';
 import { bold, emit, say, warn } from '../output.js';
-import { fail } from '../failure.js';
+import { CliFailure, fail } from '../failure.js';
 import { planMigrations, wantsTransaction, type MigrationFile } from '../migrations.js';
-import { pgSslEnv } from '../pgTls.js';
+import { describePgError, PgConnectError, PgServerError, PgSession, type PgResult, type PgTarget } from '../pgWire.js';
+import { splitScript, type ScriptStatement } from '../sqlScript.js';
 
 /** How a path reads in a message: relative to here when that is shorter, absolute otherwise. */
 function shown(path: string): string {
@@ -87,67 +89,81 @@ function readFolder(directory: string): LoadedMigration[] {
 		});
 }
 
-/**
- * Run some SQL and give back what psql said.
- *
- * Fed on stdin rather than with `-f`, because what runs is a migration wrapped in a
- * transaction with its ledger row, which is not a thing on disk. `ON_ERROR_STOP` is what
- * makes a failure a non-zero exit instead of a message scrolling past a "success".
- */
-function runSql(details: Connection, sql: string, extra: readonly string[] = []): Promise<{ code: number; out: string; err: string }> {
-	return new Promise((done) => {
-		const child = spawn(
-			'psql',
-			[
-				'--host', details.host,
-				'--port', String(details.port),
-				'--username', details.user,
-				'--dbname', details.database,
-				'--no-psqlrc',
-				'-v', 'ON_ERROR_STOP=1',
-				...extra
-			],
-			{ stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PGPASSWORD: details.password, ...pgSslEnv(details.ssl) } }
-		);
-		let out = '';
-		let err = '';
-		child.stdout.on('data', (chunk) => (out += String(chunk)));
-		child.stderr.on('data', (chunk) => (err += String(chunk)));
-		child.on('error', (error) => {
-			done({
-				code: 127,
-				out: '',
-				err:
-					(error as NodeJS.ErrnoException).code === 'ENOENT'
-						? 'psql is not installed, and db push needs it to run your migrations. `snoutdata db url` prints a connection string for any client.'
-						: String(error)
-			});
-		});
-		child.on('close', (code) => done({ code: code ?? 0, out, err }));
-		child.stdin.end(sql);
-	});
+/** One connection, as `push` needs it: a statement at a time, then goodbye. */
+export interface SqlSession {
+	query(sql: string, copyData?: string): Promise<PgResult>;
+	close(): void;
+}
+
+/** What `runPush` reaches the world through. Tests hand it a fake database. */
+export interface PushHost {
+	connection(ref: string): Promise<Pick<Connection, keyof PgTarget | 'wakesInstantly'>>;
+	open(target: PgTarget): Promise<SqlSession>;
+}
+
+const LIVE: PushHost = {
+	connection: (ref) => connection(ref),
+	open: (target) => PgSession.open(target)
+};
+
+/** A connection that failed before running anything, as the failure an agent branches on. */
+function unreachable(error: unknown, ref: string): never {
+	if (error instanceof PgConnectError) {
+		throw new CliFailure('network', `Could not reach ${ref}'s database: ${error.message}.`);
+	}
+	if (error instanceof PgServerError) {
+		throw new CliFailure('failed', `${ref}'s database refused the connection: ${error.message}`);
+	}
+	throw error;
+}
+
+/** Open a connection, or fail in a sentence. */
+async function openSession(host: PushHost, target: PgTarget, ref: string): Promise<SqlSession> {
+	try {
+		return await host.open(target);
+	} catch (error) {
+		return unreachable(error, ref);
+	}
 }
 
 /** What has already run, read from the project's own database. */
-async function readLedger(details: Connection): Promise<{ name: string; checksum: string }[]> {
-	const created = await runSql(details, LEDGER_DDL);
-	if (created.code !== 0) {
-		throw new Error(created.err.trim() || `could not create ${LEDGER}`);
+async function readLedger(host: PushHost, target: PgTarget, ref: string): Promise<{ name: string; checksum: string }[]> {
+	const session = await openSession(host, target, ref);
+	try {
+		await session.query(LEDGER_DDL);
+		const { rows } = await session.query(`select name, checksum from ${LEDGER};`);
+		return rows.map(([name, checksum]) => ({ name: name ?? '', checksum: checksum ?? '' }));
+	} catch (error) {
+		if (error instanceof PgServerError) {
+			throw new CliFailure('failed', `Could not read ${LEDGER} on ${ref}: ${error.message}`);
+		}
+		return unreachable(error, ref);
+	} finally {
+		session.close();
 	}
-	// A tab separator, because a migration's NAME is a file name and may hold anything a
-	// file name may hold, including a comma or a space.
-	const rows = await runSql(details, `select name || E'\\t' || checksum from ${LEDGER};`, ['-tA']);
-	if (rows.code !== 0) {
-		throw new Error(rows.err.trim() || `could not read ${LEDGER}`);
+}
+
+/**
+ * Run a migration's statements in order on a connection of its own, stopping at the first that
+ * fails. Null when all of them ran; otherwise what the database said, as psql would print it,
+ * with the line of the file the failing statement starts on.
+ */
+async function runStatements(session: SqlSession, statements: readonly ScriptStatement[], name: string): Promise<string | null> {
+	for (const statement of statements) {
+		try {
+			await session.query(statement.sql, statement.copyData);
+		} catch (error) {
+			if (error instanceof PgServerError) {
+				const where = statement.line > 0 ? `${name}:${statement.line}: ` : '';
+				return `${where}${describePgError(error, statement.sql, statement.line > 0 ? statement.line : 1)}`;
+			}
+			if (error instanceof PgConnectError) {
+				return `the connection was lost: ${error.message}`;
+			}
+			throw error;
+		}
 	}
-	return rows.out
-		.split('\n')
-		.map((line) => line.trim())
-		.filter((line) => line.length > 0)
-		.map((line) => {
-			const tab = line.indexOf('\t');
-			return { name: line.slice(0, tab), checksum: line.slice(tab + 1) };
-		});
+	return null;
 }
 
 function literal(value: string): string {
@@ -194,6 +210,10 @@ export async function push(ref: string, options: PushOptions = {}): Promise<numb
 		// ones after it were never tried. Both used to be exit 1 and a paragraph.
 		if (result.problems) {
 			const lines = result.problems.map((problem) => `  ${problem.reason}`).join('\n');
+			// A psql command is a property of the folder alone; the database agrees with it fine.
+			if (result.problems.every((problem) => problem.code === 'psql-command')) {
+				fail('failed', `Refused, and nothing ran:\n${lines}`, { ref, problems: result.problems });
+			}
 			fail('conflict', `Refused. This folder and ${ref} do not agree:\n${lines}`, {
 				ref,
 				problems: result.problems
@@ -227,7 +247,8 @@ export async function push(ref: string, options: PushOptions = {}): Promise<numb
 export async function runPush(
 	ref: string,
 	options: PushOptions = {},
-	note: (message: string) => void = () => {}
+	note: (message: string) => void = () => {},
+	host: PushHost = LIVE
 ): Promise<PushResult> {
 	const directory = resolve(
 		options.dir === undefined ? join(process.cwd(), 'migrations') : isAbsolute(options.dir) ? options.dir : join(process.cwd(), options.dir)
@@ -244,11 +265,19 @@ export async function runPush(
 		return { ref, directory, ok: true, applied: [], upToDate: true, notes };
 	}
 
-	const details = await connection(ref);
+	const details = await host.connection(ref);
+	const target: PgTarget = {
+		host: details.host,
+		port: details.port,
+		database: details.database,
+		user: details.user,
+		password: details.password,
+		ssl: details.ssl
+	};
 	if (!details.wakesInstantly) {
 		record('This project is paused; the connection will wake it, which takes a few seconds.');
 	}
-	const already = await readLedger(details);
+	const already = await readLedger(host, target, ref);
 	const plan = planMigrations(files, already, { outOfOrder: options.outOfOrder });
 
 	if (!plan.ok) {
@@ -258,6 +287,21 @@ export async function runPush(
 
 	const byName = new Map(files.map((file) => [file.name, file]));
 	const pending = plan.pending.map((one) => byName.get(one.name)!);
+
+	// psql's own commands cannot run without psql. Found before anything runs, dry run included,
+	// so a folder is never left with half of its pending files applied because of one.
+	const scripts = new Map(pending.map((one) => [one.name, splitScript(one.sql)]));
+	const meta = pending.flatMap((one) =>
+		scripts.get(one.name)!.metaCommands.map((command) => ({
+			code: 'psql-command',
+			name: one.name,
+			reason: `${one.name} line ${command.line} is a psql command (${command.text.length > 60 ? `${command.text.slice(0, 57)}...` : command.text}), which only psql runs. db push sends SQL to the database itself, so put the SQL it stands for in the file instead.`
+		}))
+	);
+	if (meta.length > 0) {
+		return { ref, directory, ok: false, applied: [], problems: meta, notes };
+	}
+
 	if (pending.length === 0) {
 		record(`${ref} is up to date: ${already.length} migration${already.length === 1 ? '' : 's'} already applied.`);
 		return { ref, directory, ok: true, applied: [], upToDate: true, notes };
@@ -282,9 +326,23 @@ export async function runPush(
 			// it should know that at the moment it matters.
 			record(`${migration.name} runs outside a transaction, so an interruption can leave it half applied.`);
 		}
-		const sql = wrapped ? `begin;\n${migration.sql}\n${ledgerRow}\ncommit;\n` : `${migration.sql}\n${ledgerRow}\n`;
-		const result = await runSql(details, sql);
-		if (result.code !== 0) {
+		// The ledger row and the transaction's edges carry no line of the file.
+		const statements: ScriptStatement[] = [
+			...(wrapped ? [{ sql: 'begin;', line: 0 }] : []),
+			...scripts.get(migration.name)!.statements,
+			{ sql: ledgerRow, line: 0 },
+			...(wrapped ? [{ sql: 'commit;', line: 0 }] : [])
+		];
+		// A connection for each migration, as each psql was: a `set` in one never reaches the next.
+		const session = await openSession(host, target, ref);
+		let error: string | null;
+		try {
+			error = await runStatements(session, statements, migration.name);
+		} finally {
+			// Closing a connection with its transaction open is what rolls a failed one back.
+			session.close();
+		}
+		if (error !== null) {
 			// Stop at the first failure. The ones after it were written expecting this one
 			// to have run, so carrying on is how a half-migrated schema is made.
 			if (wrapped) {
@@ -296,7 +354,7 @@ export async function runPush(
 				ok: false,
 				applied: done,
 				failed: migration.name,
-				error: result.err.trim(),
+				error,
 				notes
 			};
 		}

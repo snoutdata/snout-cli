@@ -31,6 +31,8 @@ function operations(over: Partial<McpOperations> = {}): McpOperations {
 		restartContainer: async (ref, name) => ({ ref, restarted: name }),
 		deleteContainer: async (ref, name) => ({ ref, removed: name }),
 		containerLogs: async (ref) => ({ ref, lines: [] }),
+		containerEgress: async (ref) => ({ ref, allowlist: null }),
+		setContainerEgress: async (ref, allow) => ({ ref, allowlist: allow === null ? null : { allow } }),
 		listTokens: async () => ({ tokens: [{ id: 'tok_1', name: 'ci', prefix: 'sdt_abc' }] }),
 		createToken: async (name) => ({ token: 'sdt_secret', name }),
 		revokeToken: async (id) => ({ id, revoked: true }),
@@ -225,6 +227,7 @@ test('every tool the CLI advertises can actually be called', async () => {
 		deploy_container: { ref: 'b7kq2m9xt4rvz', name: 'wa', image: 'ghcr.io/acme/wa:1' },
 		restart_container: { ref: 'b7kq2m9xt4rvz', name: 'wa' },
 		delete_container: { ref: 'b7kq2m9xt4rvz', name: 'wa' },
+		set_container_egress: { ref: 'b7kq2m9xt4rvz', allow: ['api.example.com:443'] },
 		size_function: { ref: 'b7kq2m9xt4rvz', name: 'hello', memoryMb: 256, concurrency: 4 },
 		set_product: { ref: 'b7kq2m9xt4rvz', product: 'storage', enabled: true },
 		add_domain: { ref: 'b7kq2m9xt4rvz', hostname: 'api.example.com' },
@@ -731,4 +734,29 @@ test('a Cloud pod made by cluster_run is done, with no job to follow', async () 
 	const ran = await call('cluster_run', { project: 'abcdefghjkmnp', operation: add, confirm: true }, ops, options);
 	const out = JSON.parse(text(ran)) as { ran: boolean; done: string };
 	assert.deepEqual([out.ran, out.done], [true, 'New node pod qrstvwxyzabcd.']);
+});
+
+test('container egress is shown, set and cleared as the CLI does, one change at a time', async () => {
+	const seen: Array<readonly string[] | null> = [];
+	const ops = operations({
+		setContainerEgress: async (ref, allow) => {
+			seen.push(allow);
+			return { ref, allowlist: allow === null ? null : { allow } };
+		}
+	});
+	assert.match(text(await call('container_egress', { ref: 'b7kq2m9xt4rvz' }, ops)), /"allowlist": null/);
+	assert.equal(isError(await call('set_container_egress', { ref: 'b7kq2m9xt4rvz', allow: [] }, ops)), false);
+	assert.equal(isError(await call('set_container_egress', { ref: 'b7kq2m9xt4rvz', clear: true }, ops)), false);
+	assert.deepEqual(seen, [[], null]);
+	// Neither, both, or a list that is not one: a sentence, and nothing sent.
+	for (const args of [{}, { allow: ['a.example.com'], clear: true }, { allow: 'a.example.com' }, { allow: [443] }]) {
+		const answer = await call('set_container_egress', { ref: 'b7kq2m9xt4rvz', ...args }, ops);
+		assert.equal(isError(answer), true, JSON.stringify(args));
+	}
+	assert.equal(seen.length, 2);
+	const listed = await handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, ops, OPTIONS);
+	const tools = (listed!.result as { tools: { name: string; annotations?: { readOnlyHint?: boolean } }[] }).tools;
+	const by = new Map(tools.map((t) => [t.name, t.annotations]));
+	assert.equal(by.get('container_egress')?.readOnlyHint, true);
+	assert.equal(by.get('set_container_egress')?.readOnlyHint, false);
 });
