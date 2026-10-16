@@ -149,6 +149,14 @@ function operations(): McpOperations {
 		restartContainer: (ref, name) => containers.runRestart(ref, name),
 		deleteContainer: (ref, name) => containers.runRemove(ref, name),
 		containerLogs: (ref, options) => containers.runLogs(ref, options),
+		containerEgress: async (ref) => {
+			const answer = await containers.runList(ref);
+			return { ref: answer.ref, allowlist: answer.allowlist ?? null };
+		},
+		setContainerEgress: async (ref, allow) => {
+			const answer = await containers.runEgress(ref, allow);
+			return { ref: answer.ref, allowlist: answer.allowlist ?? null, note: 'Running containers follow it within a minute; nothing restarts.' };
+		},
 		listTokens: () => api.call('cloud-token-list', {}),
 		createToken: (name, expiresInDays, project) =>
 			api.call('cloud-token-create', {

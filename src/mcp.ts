@@ -90,6 +90,10 @@ export interface McpOperations {
 	restartContainer(ref: string, name: string): Promise<unknown>;
 	deleteContainer(ref: string, name: string): Promise<unknown>;
 	containerLogs(ref: string, options: { name?: string; errorsOnly?: boolean; limit?: number }): Promise<unknown>;
+	/** Where the project's containers may send: null is the public internet, a list is only those. */
+	containerEgress(ref: string): Promise<unknown>;
+	/** Set the allowlist (`[]` is nothing outside the project), or with null clear it. */
+	setContainerEgress(ref: string, allow: readonly string[] | null): Promise<unknown>;
 	listTokens(): Promise<unknown>;
 	/** One project whole: the list row plus products, function and secret names, domains. */
 	getProject(ref: string): Promise<unknown>;
@@ -292,7 +296,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'push_migrations',
-		description: 'Run the .sql files in a folder against a project, in name order, once each, recording what ran in a _snoutdata_migrations table. Refuses a file that changed after it ran, a file that has gone, and a new file that sorts before one already applied. Use dryRun first to see what would happen. Needs psql on this machine.',
+		description: 'Run the .sql files in a folder against a project, in name order, once each, recording what ran in a _snoutdata_migrations table. Refuses a file that changed after it ran, a file that has gone, and a new file that sorts before one already applied. Use dryRun first to see what would happen. Needs nothing installed: the CLI connects to the database itself. A file holding a psql command (\\i, \\set) is refused before anything runs.',
 		inputSchema: object({ ref: STRING, dir: STRING, dryRun: { type: 'boolean' } }, ['ref'])
 	},
 	{
@@ -385,6 +389,16 @@ export const TOOLS: readonly ToolDefinition[] = [
 		name: 'container_logs',
 		description: "What a project's containers printed to stdout and stderr in the last seven days, newest first: each line's time, container, stream and text. Lines arrive about a minute after they are printed. Use it when list_containers says failed or restarting. name narrows to one container, errorsOnly to stderr, limit is at most 500 (default 100). Costs nothing.",
 		inputSchema: object({ ref: STRING, name: STRING, errorsOnly: { type: 'boolean' }, limit: { type: 'integer' } }, ['ref'])
+	},
+	{
+		name: 'container_egress',
+		description: "Where a project's containers may send. allowlist null means the public internet (within the limits on how much and how fast); otherwise allowlist.allow is the only destinations they reach, and alwaysAllowed what they reach whatever the list says (the project's own database and API). The same as `snoutdata containers egress`. Costs nothing.",
+		inputSchema: object({ ref: STRING }, ['ref'])
+	},
+	{
+		name: 'set_container_egress',
+		description: "Hold a project's containers to an allowlist, or let them reach the public internet again. Give EITHER allow, a list of destinations (\"api.example.com:443\", \"api.example.com\" for any port, \"203.0.113.0/24:443,8443\"; an empty list means nothing outside the project), OR clear: true. The list replaces the one there. Running containers follow it within a minute and nothing restarts, so a container that needs a destination left off stops reaching it. The same as `snoutdata containers egress set|clear`.",
+		inputSchema: object({ ref: STRING, allow: { type: 'array', items: STRING }, clear: { type: 'boolean' } }, ['ref'])
 	},
 	{
 		name: 'list_function_secrets',
@@ -499,7 +513,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 /** The tools that only read. Every other one changes something, and says so to the client. */
 const READ_ONLY_TOOLS = new Set([
 	'whoami', 'list_projects', 'get_connection_url', 'usage', 'export_status', 'list_teams', 'list_tokens',
-	'list_functions', 'list_function_secrets', 'function_logs', 'get_project', 'list_products', 'list_domains', 'restore_window',
+	'list_functions', 'list_function_secrets', 'function_logs', 'container_egress', 'get_project', 'list_products', 'list_domains', 'restore_window',
 	'cluster_status', 'cluster_advice', 'cluster_plan', 'cluster_jobs', 'cluster_watch_job'
 ]);
 const DESTRUCTIVE_TOOLS = new Set(['delete_project', 'delete_function', 'reset_password', 'revoke_token', 'remove_domain', 'cluster_run']);
@@ -1102,6 +1116,32 @@ async function callTool(
 				}
 				const limit = typeof args.limit === 'number' ? args.limit : undefined;
 				return said(id, await operations.containerLogs(ref, { name: stringArg(args, 'name') ?? undefined, errorsOnly: args.errorsOnly === true, limit }));
+			}
+			case 'container_egress': {
+				const ref = stringArg(args, 'ref');
+				if (!ref) {
+					return said(id, 'container_egress needs a project ref.', true);
+				}
+				return said(id, await operations.containerEgress(ref));
+			}
+			case 'set_container_egress': {
+				const ref = stringArg(args, 'ref');
+				if (!ref) {
+					return said(id, 'set_container_egress needs a project ref.', true);
+				}
+				const clear = args.clear === true;
+				const allow = args.allow;
+				if (allow !== undefined && (!Array.isArray(allow) || !allow.every((one) => typeof one === 'string'))) {
+					return said(id, 'set_container_egress takes allow as a list of destinations, such as ["api.example.com:443"].', true);
+				}
+				if (clear === (allow !== undefined)) {
+					return said(
+						id,
+						'set_container_egress takes either allow (a list of destinations; [] for nothing outside the project) or clear: true (the public internet again), and exactly one of them.',
+						true
+					);
+				}
+				return said(id, await operations.setContainerEgress(ref, clear ? null : (allow as string[])));
 			}
 			case 'list_function_secrets': {
 				const ref = stringArg(args, 'ref');
