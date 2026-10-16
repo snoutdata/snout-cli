@@ -115,7 +115,7 @@ export interface CloudPod {
 	/** The owner asked for a replica; a new one follows a failover. */
 	wantsReplica?: boolean;
 	/** A failover of this node to its replica: stopping the node, promoting the replica, or stopped. */
-	failover?: 'fence' | 'promote' | 'failed' | null;
+	failover?: 'fence' | 'promote' | 'held' | 'failed' | null;
 	failoverError?: string | null;
 }
 
