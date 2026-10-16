@@ -455,7 +455,7 @@ test('reset_password returns a URL, as its description promises, and says to wai
 	}));
 	const said = JSON.parse(text(answer)) as { url: string; next: string };
 	assert.match(said.url, /^postgres:\/\//);
-	assert.match(said.next, /five seconds/);
+	assert.match(said.next, /fifteen seconds/);
 });
 
 test('a local ref asked of a cloud tool is one sentence naming the tools that work locally', async () => {
