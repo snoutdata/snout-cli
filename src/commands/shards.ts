@@ -1027,6 +1027,8 @@ export function replicaPhrase(pod: CloudPod): string {
 			return 'failing over: its replica is taking its place';
 		case 'failed':
 			return `failover stopped: ${pod.failoverError ?? 'see cluster alerts'}`;
+		case 'held':
+			return 'failover held: its replica was behind and its last writes could not be copied to it, so it was not promoted (see cluster alerts)';
 	}
 	if (pod.desiredState === 'deleted' || pod.replicaOf === undefined) {
 		return '';
