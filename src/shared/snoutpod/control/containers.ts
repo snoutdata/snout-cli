@@ -878,6 +878,147 @@ export function mayDeployContainer(
 }
 
 // ------------------------------------------------------------------------------
+// Where a container may send (CT29, migration 210)
+// ------------------------------------------------------------------------------
+
+/**
+ * One destination of a project's allowlist: a host name, an IPv4 address or an IPv4 range, and the
+ * ports it may be reached on (none: any port). With no allowlist a container reaches the public
+ * internet; with one, only what it lists, the project's own front door and its own containers.
+ */
+export interface EgressAllowEntry {
+	readonly destination: string;
+	readonly ports: readonly number[];
+}
+
+/** The most destinations one allowlist holds, and ports one destination names. */
+export const MAX_EGRESS_ALLOW = 32;
+export const MAX_EGRESS_PORTS = 16;
+
+const EGRESS_HOST = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$/;
+const EGRESS_IPV4 = /^(\d{1,3}(?:\.\d{1,3}){3})(?:\/(\d{1,2}))?$/;
+
+function egressPorts(value: unknown, destination: string): number[] | { error: string } {
+	const list = value === undefined || value === null ? [] : value;
+	const bad = { error: `${destination}: ports are up to ${MAX_EGRESS_PORTS} whole numbers, 1 to 65535.` };
+	if (!Array.isArray(list) || list.length > MAX_EGRESS_PORTS) {
+		return bad;
+	}
+	const ports = list.map((port) => (typeof port === 'string' && /^\d{1,5}$/.test(port) ? Number(port) : port));
+	if (ports.some((port) => typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535)) {
+		return bad;
+	}
+	return [...new Set(ports as number[])].sort((a, b) => a - b);
+}
+
+/** A destination, checked and normalised (lower case; a range at its network address), or why not. */
+export function checkEgressDestination(input: string): string | { error: string } {
+	const text = input.trim().toLowerCase();
+	const v4 = EGRESS_IPV4.exec(text);
+	if (v4) {
+		const ip = parseIPv4(v4[1] ?? '');
+		const bits = v4[2] === undefined ? 32 : Number(v4[2]);
+		if (!ip || bits > 32) {
+			return { error: `${input} is not an IPv4 address or range.` };
+		}
+		const value = ((ip[0]! << 24) | (ip[1]! << 16) | (ip[2]! << 8) | ip[3]!) >>> 0;
+		const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+		const base = (value & mask) >>> 0;
+		const dotted = [24, 16, 8, 0].map((shift) => (base >>> shift) & 255);
+		// A range wholly inside a private or special block names nothing a container can reach: those
+		// are routed away from every container network.
+		if (V4_NOT_PUBLIC.some(([block, size]) => bits >= size && inV4(dotted, block, size))) {
+			return { error: `${input} is not on the public internet, and a container reaches nothing else.` };
+		}
+		return bits === 32 ? dotted.join('.') : `${dotted.join('.')}/${bits}`;
+	}
+	if (parseIPv6(text)) {
+		return { error: `${input} is an IPv6 address. Containers send over IPv4 only; list its IPv4 address or its host name.` };
+	}
+	if (text.startsWith('*.')) {
+		return { error: `${input}: a wildcard cannot be looked up. List each host name, or the address range.` };
+	}
+	if (!EGRESS_HOST.test(text)) {
+		return { error: `${input} is not a host name, an IPv4 address or an IPv4 range.` };
+	}
+	return text;
+}
+
+/**
+ * One destination as typed on a command line or in a form: `api.example.com`, `api.example.com:443`,
+ * `203.0.113.0/24:443,8443`. No port means any port.
+ */
+export function parseEgressEntry(input: string): EgressAllowEntry | { error: string } {
+	const text = input.trim();
+	const colon = text.lastIndexOf(':');
+	// More than one colon is an IPv6 address, which checkEgressDestination names as such.
+	const split = colon !== -1 && text.indexOf(':') === colon;
+	const destination = checkEgressDestination(split ? text.slice(0, colon) : text);
+	if (typeof destination !== 'string') {
+		return destination;
+	}
+	const ports = egressPorts(split ? text.slice(colon + 1).split(',').map((one) => one.trim()) : [], destination);
+	if ('error' in ports) {
+		return ports;
+	}
+	return { destination, ports };
+}
+
+/** An allowlist as the dashboard or the CLI sends it (entries, or strings), checked whole. */
+export function checkEgressAllow(value: unknown): { allow: EgressAllowEntry[] } | { error: string } {
+	if (!Array.isArray(value)) {
+		return { error: 'An allowlist is a list of destinations.' };
+	}
+	if (value.length > MAX_EGRESS_ALLOW) {
+		return { error: `An allowlist holds at most ${MAX_EGRESS_ALLOW} destinations; list a range for many addresses.` };
+	}
+	const allow: EgressAllowEntry[] = [];
+	for (const item of value) {
+		let entry: EgressAllowEntry | { error: string };
+		if (typeof item === 'string') {
+			entry = parseEgressEntry(item);
+		} else if (item && typeof item === 'object' && typeof (item as { destination?: unknown }).destination === 'string') {
+			const destination = checkEgressDestination((item as { destination: string }).destination);
+			if (typeof destination !== 'string') {
+				return destination;
+			}
+			const ports = egressPorts((item as { ports?: unknown }).ports, destination);
+			entry = 'error' in ports ? ports : { destination, ports };
+		} else {
+			return { error: 'An allowlist entry is a destination and its ports.' };
+		}
+		if ('error' in entry) {
+			return entry;
+		}
+		const same = allow.find((one) => one.destination === entry.destination);
+		if (same) {
+			// One destination once: its ports together, and none (any port) wins.
+			const ports = same.ports.length === 0 || entry.ports.length === 0 ? [] : [...new Set([...same.ports, ...entry.ports])].sort((a, b) => a - b);
+			allow[allow.indexOf(same)] = { destination: same.destination, ports };
+		} else {
+			allow.push(entry);
+		}
+	}
+	return { allow };
+}
+
+/** `api.example.com:443,8443`, or the destination alone for any port: what parseEgressEntry reads. */
+export function formatEgressEntry(entry: EgressAllowEntry): string {
+	return entry.ports.length === 0 ? entry.destination : `${entry.destination}:${entry.ports.join(',')}`;
+}
+
+/**
+ * What a restricted project's containers always reach on top of its list: its own database and API
+ * through the front door, which is how a container is told to reach them (`DATABASE_URL`).
+ */
+export function frontDoorEgress(ref: string, dbDomain: string, apiDomain: string): EgressAllowEntry[] {
+	return [
+		{ destination: `${ref}.${dbDomain}`.toLowerCase(), ports: [5432] },
+		{ destination: `${ref}.${apiDomain}`.toLowerCase(), ports: [443] }
+	];
+}
+
+// ------------------------------------------------------------------------------
 // The environment
 // ------------------------------------------------------------------------------
 

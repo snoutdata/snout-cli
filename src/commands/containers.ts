@@ -47,7 +47,13 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { call } from '../api.js';
 import { bold, dim, emit, say, table } from '../output.js';
-import { checkContainerName, parseImageReference } from '../shared/snoutpod/control/containers.js';
+import {
+	checkContainerName,
+	formatEgressEntry,
+	parseEgressEntry,
+	parseImageReference,
+	type EgressAllowEntry
+} from '../shared/snoutpod/control/containers.js';
 
 export interface DeployedContainer {
 	name: string;
@@ -77,6 +83,12 @@ export interface ContainersAnswer {
 		egress?: { month: string | null; usedBytes: number; allowanceBytes: number; held: boolean };
 	} | null;
 	containers: DeployedContainer[];
+	/**
+	 * Where the project's containers may send, when it restricts it: the list, and what they reach
+	 * whatever it says (the project's own database and API). Null: the public internet. Absent from a
+	 * control plane before 2026-10-16.
+	 */
+	allowlist?: { allow: EgressAllowEntry[]; updatedAt: string; alwaysAllowed: EgressAllowEntry[] } | null;
 }
 
 export interface ContainerDeployOptions {
@@ -464,6 +476,62 @@ export async function list(ref: string): Promise<void> {
 		const egress = answer.allowance?.egress;
 		if (egress && egress.allowanceBytes > 0) {
 			say(dim(`  Sent this month: ${gigabytes(egress.usedBytes)} of ${gigabytes(egress.allowanceBytes)}. At ${gigabytes(egress.allowanceBytes)} the project's containers stop until the 1st.`));
+		}
+	});
+}
+
+/**
+ * Set the allowlist (`host[:port,port]`, `a.b.c.d[/n][:ports]`; no port is any port), or clear it
+ * (null). An empty list is allowed and means nothing outside the project. Checked here first, with
+ * the same rule the control plane applies, so a typo is a sentence before anything is sent.
+ */
+export async function runEgress(ref: string, allow: readonly string[] | null): Promise<ContainersAnswer> {
+	if (allow === null) {
+		return call<ContainersAnswer>('cloud-project-containers', { ref, action: 'egress', clear: true });
+	}
+	const entries: EgressAllowEntry[] = [];
+	for (const one of allow) {
+		const entry = parseEgressEntry(one);
+		if ('error' in entry) {
+			throw new Error(entry.error);
+		}
+		entries.push(entry);
+	}
+	return call<ContainersAnswer>('cloud-project-containers', { ref, action: 'egress', allow: entries });
+}
+
+/** What `containers egress` prints: the default, or the list and what is reachable anyway. */
+export function describeAllowlist(answer: ContainersAnswer): string[] {
+	if (answer.allowlist === undefined) {
+		return ['This control plane does not know about allowlists yet.'];
+	}
+	if (answer.allowlist === null) {
+		return [
+			`Containers on ${answer.ref} may reach the public internet (within the limits on how much and how fast).`,
+			dim('  snoutdata containers egress set <host[:port]> ...   to allow only some destinations')
+		];
+	}
+	const lines = [
+		answer.allowlist.allow.length === 0
+			? `Containers on ${answer.ref} may reach nothing outside the project.`
+			: `Containers on ${answer.ref} may reach only:`
+	];
+	for (const entry of answer.allowlist.allow) {
+		lines.push(`  ${formatEgressEntry(entry)}${entry.ports.length === 0 ? dim('  (any port)') : ''}`);
+	}
+	lines.push(dim(`  and always: ${answer.allowlist.alwaysAllowed.map(formatEgressEntry).join(', ')}, and each other`));
+	lines.push(dim('  snoutdata containers egress clear   to allow the public internet again'));
+	return lines;
+}
+
+export async function egress(ref: string, change: { set?: readonly string[]; clear?: boolean }): Promise<void> {
+	const answer = change.clear ? await runEgress(ref, null) : change.set ? await runEgress(ref, change.set) : await runList(ref);
+	emit({ ref: answer.ref, allowlist: answer.allowlist ?? null }, () => {
+		for (const line of describeAllowlist(answer)) {
+			say(line);
+		}
+		if (change.set || change.clear) {
+			say(dim('  Running containers follow it within a minute; nothing restarts.'));
 		}
 	});
 }
