@@ -112,3 +112,25 @@ test('an archive over the upload cap is refused before it is sent; a refused lin
 	assert.match(uploadFailure(413, ''), /at most 1 GB/);
 	assert.equal(withoutCloudInternals('arn:aws:iam::role/x said no'), 'a SnoutData credential said no');
 });
+
+test('containers egress: a destination that is not one is a sentence before anything is sent; the three states read plainly', async () => {
+	const { runEgress, describeAllowlist } = await import('./containers.js');
+	await assert.rejects(() => runEgress('abc', ['10.0.0.1:443']), /not on the public internet/);
+	await assert.rejects(() => runEgress('abc', ['api.example.com:http']), /ports are/);
+	const plain = (lines: string[]) => lines.join('\n').replace(/\u001b\[[0-9;]*m/g, '');
+	assert.match(plain(describeAllowlist({ ref: 'abc', allowance: null, containers: [], allowlist: null })), /may reach the public internet/);
+	const listed = plain(
+		describeAllowlist({
+			ref: 'abc',
+			allowance: null,
+			containers: [],
+			allowlist: {
+				allow: [{ destination: 'api.example.com', ports: [443] }, { destination: '140.82.112.0/20', ports: [] }],
+				updatedAt: '2026-10-16T00:00:00Z',
+				alwaysAllowed: [{ destination: 'abc.db.snoutdata.com', ports: [5432] }]
+			}
+		})
+	);
+	assert.match(listed, /may reach only:\n  api\.example\.com:443\n  140\.82\.112\.0\/20  \(any port\)\n  and always: abc\.db\.snoutdata\.com:5432, and each other/);
+	assert.match(plain(describeAllowlist({ ref: 'abc', allowance: null, containers: [], allowlist: { allow: [], updatedAt: '', alwaysAllowed: [] } })), /nothing outside the project/);
+});

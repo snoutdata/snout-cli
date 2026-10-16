@@ -137,6 +137,11 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata containers logs [name] [--errors] [--tail N] [--follow]
   snoutdata containers restart <name>
   snoutdata containers delete <name>
+  snoutdata containers egress              where its containers may send (default: the internet)
+  snoutdata containers egress set <host[:port,...]|ip[/n][:port,...]> ...
+                                           only these destinations from now on
+  snoutdata containers egress set --none   nothing outside the project
+  snoutdata containers egress clear        the public internet again
 
   snoutdata secrets set NAME=value [...]   the environment functions and containers run with
   snoutdata secrets set NAME --stdin       the value from a pipe, not from history
@@ -601,6 +606,29 @@ async function run(args: ParsedArgs): Promise<number> {
 					}
 					await containers.remove(ref(), rest[0]);
 					return 0;
+				}
+				case 'egress': {
+					const verb = rest[0];
+					if (verb === undefined || verb === 'list' || verb === 'show') {
+						await containers.egress(ref(), {});
+						return 0;
+					}
+					if (verb === 'clear') {
+						await containers.egress(ref(), { clear: true });
+						return 0;
+					}
+					if (verb === 'set') {
+						const destinations = rest.slice(1);
+						if (destinations.length === 0 && !flagBoolean(args, 'none')) {
+							throw new UsageError('containers egress set needs at least one destination (api.example.com:443), or --none for nothing outside the project');
+						}
+						if (destinations.length > 0 && flagBoolean(args, 'none')) {
+							throw new UsageError('containers egress set takes destinations or --none, not both');
+						}
+						await containers.egress(ref(), { set: destinations });
+						return 0;
+					}
+					throw new UsageError(`unknown command: containers egress ${verb}; it is egress, egress set or egress clear`);
 				}
 				default:
 					throw new UsageError(`unknown command: containers ${action}`);
