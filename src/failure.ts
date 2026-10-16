@@ -131,6 +131,11 @@ export function codeForStatus(status: number, serverCode?: string | null): Failu
 	if (serverCode === 'no-capacity') {
 		return 'no-capacity';
 	}
+	// A region we do not run is the command being wrong, not a region being full: retrying it
+	// can never work.
+	if (status === 400 && serverCode === 'region') {
+		return 'usage';
+	}
 	if (status === 403) {
 		return 'forbidden';
 	}

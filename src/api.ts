@@ -214,13 +214,12 @@ export async function call<T>(
 	try {
 		parsed = text ? JSON.parse(text) : {};
 	} catch {
-		throw new ApiError(response.status, text.slice(0, 300) || response.statusText);
+		// Something in front of the control plane can answer with a page of HTML; printing it
+		// filled a terminal with markup. Say what happened instead.
+		throw new ApiError(response.status, unreadableAnswer(response.status, response.statusText, text));
 	}
 	if (!response.ok) {
-		const message =
-			typeof parsed === 'object' && parsed && 'error' in parsed
-				? String((parsed as { error: unknown }).error)
-				: `${response.status} ${response.statusText}`;
+		const message = errorSentence(parsed) ?? `${response.status} ${response.statusText}`;
 		// A credential problem exits 3, not 1, and carries the server's own words —
 		// "that access token was revoked" sends a script's owner somewhere useful, and
 		// a generic failure exit code sends them to the network.
@@ -440,4 +439,27 @@ export async function waitForReady(
 		}
 		await new Promise((resolve) => setTimeout(resolve, 2_000));
 	}
+}
+
+/** The sentence in a refusal: `error`, or a project door's `message` with its `hint`. */
+export function errorSentence(parsed: unknown): string | null {
+	if (typeof parsed !== 'object' || !parsed) {
+		return null;
+	}
+	const said = parsed as { error?: unknown; message?: unknown; hint?: unknown };
+	if (typeof said.error === 'string' && said.error) {
+		return said.error;
+	}
+	if (typeof said.message === 'string' && said.message) {
+		return typeof said.hint === 'string' && said.hint ? `${said.message} ${said.hint}` : said.message;
+	}
+	return null;
+}
+
+/** A body that is not JSON, as a sentence: never markup. */
+export function unreadableAnswer(status: number, statusText: string, text: string): string {
+	if (/^\s*</.test(text) || !text.trim()) {
+		return `SnoutData Cloud answered ${status}${statusText ? ` ${statusText}` : ''} with no message. Try again in a minute.`;
+	}
+	return text.slice(0, 300);
 }
