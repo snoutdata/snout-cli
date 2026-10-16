@@ -75,6 +75,9 @@ test('a full region is not "ask again shortly"', () => {
 	// A 503 without a code we know stays what it was.
 	assert.equal(codeForStatus(503, null), 'not-ready');
 	assert.equal(codeForStatus(503, 'something-new'), 'not-ready');
+	// A region that does not exist at all is a usage error, never "full, try later".
+	assert.equal(codeForStatus(400, 'region'), 'usage');
+	assert.equal(codeForStatus(400, null), 'failed');
 	// No exit code is shared by two failure codes, except `server`, which is 1 on purpose.
 	const taken = new Map<number, string>();
 	for (const [code, exit] of Object.entries(EXIT)) {
@@ -251,4 +254,19 @@ test('a file the person named that is not there is a sentence about that file, n
 	// A program that is not installed is a different failure, with its own sentence elsewhere.
 	assert.equal(missingFile(Object.assign(new Error('spawn psql ENOENT'), { code: 'ENOENT', syscall: 'spawn', path: 'psql' })), null);
 	assert.equal(missingFile(new TypeError('fetch failed')), null);
+});
+
+test('a refusal is a sentence, never a page of markup', async () => {
+	const { errorSentence, unreadableAnswer } = await import('./api.js');
+	assert.equal(errorSentence({ error: 'Push is off.' }), 'Push is off.');
+	// A project door's own refusal is {message, hint}, and read as `error` alone it was "404 Not Found".
+	assert.equal(
+		errorSentence({ message: 'This project is starting up and was not ready in time.', hint: 'Try again in a few seconds.' }),
+		'This project is starting up and was not ready in time. Try again in a few seconds.'
+	);
+	assert.equal(errorSentence({}), null);
+	const html = unreadableAnswer(502, 'Bad Gateway', '<!DOCTYPE html>\n<html><head><title>502</title></head></html>');
+	assert.ok(!html.includes('<'), html);
+	assert.match(html, /502 Bad Gateway/);
+	assert.equal(unreadableAnswer(500, '', 'plain words'), 'plain words');
 });
