@@ -316,7 +316,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'reset_password',
-		description: "Rotate the project's database password. THE OLD ONE STOPS WORKING within about fifteen seconds, including any DATABASE_URL already written into a file or a running process; connections already open keep working. Returns the new connection URL, which works once the change applies (wait about fifteen seconds before connecting; measured at 5 to 10). Use it when a credential has leaked, not routinely.",
+		description: "Rotate the project's database password. THE OLD ONE STOPS WORKING usually within fifteen seconds (longer while the host is busy starting other databases), including any DATABASE_URL already written into a file or a running process; connections already open keep working. Returns the new connection URL, which works once the change applies (wait about fifteen seconds before connecting, and retry a refusal for up to two minutes). Use it when a credential has leaked, not routinely.",
 		inputSchema: object({ ref: STRING }, ['ref'])
 	},
 	{
@@ -988,7 +988,7 @@ async function callTool(
 				return said(id, {
 					url: details.uri,
 					appliesIn: reset.appliesIn ?? 'within about fifteen seconds',
-					next: 'Wait about fifteen seconds before connecting with this URL (a refused password before then is the change not having applied yet, not a wrong one): until the change applies the new password is refused and the old one still works. Then update DATABASE_URL wherever it is set.',
+					next: 'Wait about fifteen seconds before connecting with this URL, and retry a refusal for up to two minutes: until the change applies (usually 5 to 15 seconds, longer while the host is busy) the new password is refused and the old one still works, which does not mean the new one is wrong. Then update DATABASE_URL wherever it is set.',
 					warning: 'This URL contains a live database password. Put it in an environment variable, not in a file that is committed.'
 				});
 			}
