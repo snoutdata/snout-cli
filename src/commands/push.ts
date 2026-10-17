@@ -35,7 +35,7 @@ import { bold, emit, say, warn } from '../output.js';
 import { CliFailure, fail } from '../failure.js';
 import { planMigrations, wantsTransaction, type MigrationFile } from '../migrations.js';
 import { describePgError, PgConnectError, PgServerError, PgSession, type PgResult, type PgTarget } from '../pgWire.js';
-import { splitScript, type ScriptStatement } from '../sqlScript.js';
+import { endsTransaction, splitScript, type ScriptStatement } from '../sqlScript.js';
 
 /** How a path reads in a message: relative to here when that is shorter, absolute otherwise. */
 function shown(path: string): string {
@@ -211,7 +211,7 @@ export async function push(ref: string, options: PushOptions = {}): Promise<numb
 		if (result.problems) {
 			const lines = result.problems.map((problem) => `  ${problem.reason}`).join('\n');
 			// A psql command is a property of the folder alone; the database agrees with it fine.
-			if (result.problems.every((problem) => problem.code === 'psql-command')) {
+			if (result.problems.every((problem) => problem.code === 'psql-command' || problem.code === 'ends-transaction')) {
 				fail('failed', `Refused, and nothing ran:\n${lines}`, { ref, problems: result.problems });
 			}
 			fail('conflict', `Refused. This folder and ${ref} do not agree:\n${lines}`, {
@@ -298,8 +298,24 @@ export async function runPush(
 			reason: `${one.name} line ${command.line} is a psql command (${command.text.length > 60 ? `${command.text.slice(0, 57)}...` : command.text}), which only psql runs. db push sends SQL to the database itself, so put the SQL it stands for in the file instead.`
 		}))
 	);
-	if (meta.length > 0) {
-		return { ref, directory, ok: false, applied: [], problems: meta, notes };
+	// A file that ends its own transaction breaks the one it is wrapped in: what ran before the
+	// COMMIT stays even when a later statement fails, and the ledger row is not written with it.
+	const ending = pending
+		.filter((one) => wantsTransaction(one.sql))
+		.flatMap((one) =>
+			scripts.get(one.name)!.statements.flatMap((statement) => {
+				const word = endsTransaction(statement.sql);
+				return word
+					? [{
+						code: 'ends-transaction',
+						name: one.name,
+						reason: `${one.name} line ${statement.line} ends the transaction itself (${word}). db push already runs each file in one transaction and records it there, so a ${word} would keep what ran before it if a later statement failed. Take it out, or put -- snoutdata:no-transaction at the top of the file to run it exactly as written.`
+					}]
+					: [];
+			})
+		);
+	if (meta.length > 0 || ending.length > 0) {
+		return { ref, directory, ok: false, applied: [], problems: [...meta, ...ending], notes };
 	}
 
 	if (pending.length === 0) {
@@ -347,6 +363,11 @@ export async function runPush(
 			// to have run, so carrying on is how a half-migrated schema is made.
 			if (wrapped) {
 				record('It ran inside a transaction, so nothing from it is in the database.');
+				// CREATE INDEX CONCURRENTLY, VACUUM and the like: Postgres's words name the problem
+				// and not the way out of it.
+				if (/cannot run inside a transaction block/i.test(error)) {
+					record('Put -- snoutdata:no-transaction at the top of the file to run it outside one.');
+				}
 			}
 			return {
 				ref,

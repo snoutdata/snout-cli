@@ -296,7 +296,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'push_migrations',
-		description: 'Run the .sql files in a folder against a project, in name order, once each, recording what ran in a _snoutdata_migrations table. Refuses a file that changed after it ran, a file that has gone, and a new file that sorts before one already applied. Use dryRun first to see what would happen. Needs nothing installed: the CLI connects to the database itself. A file holding a psql command (\\i, \\set) is refused before anything runs.',
+		description: 'Run the .sql files in a folder against a project, in name order, once each, recording what ran in a _snoutdata_migrations table. Refuses a file that changed after it ran, a file that has gone, and a new file that sorts before one already applied. Use dryRun first to see what would happen. Needs nothing installed: the CLI connects to the database itself. A file holding a psql command (\\i, \\set), or a COMMIT, END or ROLLBACK that would end the transaction the file runs in, is refused before anything runs; a file starting with -- snoutdata:no-transaction runs as written, outside a transaction.',
 		inputSchema: object({ ref: STRING, dir: STRING, dryRun: { type: 'boolean' } }, ['ref'])
 	},
 	{

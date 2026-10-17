@@ -56,6 +56,21 @@ function isCopyFromStdin(sql: string): boolean {
 	return /^\s*copy\b/i.test(text) && /\bfrom\s+stdin\b/i.test(text);
 }
 
+/**
+ * The word that ends the transaction it runs in, when a statement is one of those: COMMIT, END,
+ * ROLLBACK (not ROLLBACK TO a savepoint), ABORT, or PREPARE TRANSACTION. Null for anything else.
+ * A dollar-quoted body and BEGIN ATOMIC ... END are one statement each here, so a COMMIT inside a
+ * procedure's body is not one of these.
+ */
+export function endsTransaction(sql: string): string | null {
+	const text = stripComments(sql).trim();
+	if (/^rollback\s+(?:(?:work|transaction)\s+)?to\b/i.test(text)) {
+		return null;
+	}
+	const word = /^(commit|end|rollback|abort|prepare\s+transaction)\b/i.exec(text);
+	return word ? word[1]!.toUpperCase().replace(/\s+/, ' ') : null;
+}
+
 /** `--` and `/* *\/` comments taken out, for looking at a statement's words. Not for sending. */
 function stripComments(sql: string): string {
 	return sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ');

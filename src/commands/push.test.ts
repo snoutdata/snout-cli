@@ -10,7 +10,7 @@ import { runPush, type PushHost, type SqlSession } from './push.js';
 const REF = 'b7kq2m9xt4rvz';
 
 /** A database that remembers what each connection was sent, and fails where it is told to. */
-function fakeDatabase(options: { ledger?: { name: string; checksum: string }[]; failOn?: RegExp } = {}) {
+function fakeDatabase(options: { ledger?: { name: string; checksum: string }[]; failOn?: RegExp; failMessage?: string } = {}) {
 	const connections: string[][] = [];
 	const ledger = [...(options.ledger ?? [])];
 	const copies: string[] = [];
@@ -26,7 +26,7 @@ function fakeDatabase(options: { ledger?: { name: string; checksum: string }[]; 
 						copies.push(copyData);
 					}
 					if (options.failOn?.test(sql)) {
-						throw new PgServerError(new Map([['V', 'ERROR'], ['C', '42601'], ['M', 'syntax error at or near "nope"'], ['P', '1']]));
+						throw new PgServerError(new Map([['V', 'ERROR'], ['C', '42601'], ['M', options.failMessage ?? 'syntax error at or near "nope"'], ['P', '1']]));
 					}
 					if (sql.startsWith('select name, checksum')) {
 						return { rows: ledger.map((row) => [row.name, row.checksum]), command: `SELECT ${ledger.length}` };
@@ -132,6 +132,30 @@ test('a psql command is refused before anything runs, dry run or not', async () 
 		assert.match(result.problems?.[0]?.reason ?? '', /002-b\.sql line 2 is a psql command \(\\i seed\.sql\)/);
 		assert.equal(db.connections.length, 1, 'only the ledger was read');
 	}
+});
+
+test('a file that ends its own transaction is refused before anything runs, unless it runs outside one', async () => {
+	const dir = folder({ '001-a.sql': 'create table a (id int);\ncommit;\nselect 1/0;\n' });
+	const db = fakeDatabase();
+	const result = await runPush(REF, { dir }, () => {}, db.host);
+	assert.equal(result.ok, false);
+	assert.deepEqual(result.applied, []);
+	assert.equal(result.problems?.[0]?.code, 'ends-transaction');
+	assert.match(result.problems?.[0]?.reason ?? '', /001-a\.sql line 2 ends the transaction itself \(COMMIT\)/);
+	assert.equal(db.connections.length, 1, 'only the ledger was read');
+
+	const outside = folder({ '001-a.sql': '-- snoutdata:no-transaction\ncreate table a (id int);\ncommit;\n' });
+	const db2 = fakeDatabase();
+	assert.equal((await runPush(REF, { dir: outside }, () => {}, db2.host)).ok, true);
+});
+
+test('a statement Postgres will not run in a transaction says how to run it outside one', async () => {
+	const dir = folder({ '001-a.sql': 'create index concurrently i on a (id);\n' });
+	const db = fakeDatabase({ failOn: /concurrently/, failMessage: 'CREATE INDEX CONCURRENTLY cannot run inside a transaction block' });
+	const notes: string[] = [];
+	const result = await runPush(REF, { dir }, (note) => notes.push(note), db.host);
+	assert.equal(result.ok, false);
+	assert.ok(notes.some((note) => note.includes('-- snoutdata:no-transaction')), notes.join('\n'));
 });
 
 test('a COPY in a migration is sent its rows', async () => {
