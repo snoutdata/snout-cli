@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { splitScript } from './sqlScript.js';
+import { endsTransaction, splitScript } from './sqlScript.js';
 
 function sqls(text: string): string[] {
 	return splitScript(text).statements.map((one) => one.sql);
@@ -90,4 +90,20 @@ test('comments and blank lines alone are not a statement; a file of them sends n
 
 test('an unterminated quote takes the rest of the file, and the server says what is wrong', () => {
 	assert.deepEqual(sqls("select 'open;\nselect 2;"), ["select 'open;\nselect 2;"]);
+});
+
+test('the statements that end a transaction are named, and nothing that only looks like one', () => {
+	assert.equal(endsTransaction('commit;'), 'COMMIT');
+	assert.equal(endsTransaction('-- done\nCOMMIT WORK;'), 'COMMIT');
+	assert.equal(endsTransaction('end;'), 'END');
+	assert.equal(endsTransaction('rollback;'), 'ROLLBACK');
+	assert.equal(endsTransaction('abort;'), 'ABORT');
+	assert.equal(endsTransaction("prepare  transaction 'x';"), 'PREPARE TRANSACTION');
+	assert.equal(endsTransaction('rollback to savepoint s;'), null);
+	assert.equal(endsTransaction('rollback transaction to s;'), null);
+	assert.equal(endsTransaction('begin;'), null);
+	assert.equal(endsTransaction('select 1 as commit;'), null);
+	assert.equal(endsTransaction('create table commits (id int);'), null);
+	const body = splitScript('create procedure p() language plpgsql as $$ begin commit; end $$;\ncreate function f() returns int language sql begin atomic select 1; end;\n');
+	assert.deepEqual(body.statements.map((one) => endsTransaction(one.sql)), [null, null]);
 });

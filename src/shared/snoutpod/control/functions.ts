@@ -504,11 +504,17 @@ const SECRET_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 /**
  * What every function is given without asking: where its project's API is, and the project's
  * two keys, so a function can call its own project with no configuration at all.
+ *
+ * Each key under two names: `SNOUTDATA_APP_KEY` and
+ * `SNOUTDATA_SERVER_KEY` are ours, `SNOUTDATA_ANON_KEY` and `SNOUTDATA_SERVICE_ROLE_KEY` the old
+ * names functions already read. Both sets carry the same values until Phase 8.
  */
 export const PLATFORM_FUNCTION_ENV = {
 	url: 'SNOUTDATA_URL',
 	anonKey: 'SNOUTDATA_ANON_KEY',
-	serviceRoleKey: 'SNOUTDATA_SERVICE_ROLE_KEY'
+	serviceRoleKey: 'SNOUTDATA_SERVICE_ROLE_KEY',
+	appKey: 'SNOUTDATA_APP_KEY',
+	serverKey: 'SNOUTDATA_SERVER_KEY'
 } as const;
 
 /**
