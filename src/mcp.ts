@@ -397,7 +397,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'set_container_egress',
-		description: "Hold a project's containers to an allowlist, or let them reach the public internet again. Give EITHER allow, a list of destinations (\"api.example.com:443\", \"api.example.com\" for any port, \"203.0.113.0/24:443,8443\"; an empty list means nothing outside the project), OR clear: true. The list replaces the one there. Running containers follow it within a minute and nothing restarts, so a container that needs a destination left off stops reaching it. The same as `snoutdata containers egress set|clear`.",
+		description: "Hold a project's containers to an allowlist, or let them reach the public internet again. Give EITHER allow, a list of destinations (\"api.example.com:443\", \"api.example.com\" for any port, \"140.82.112.0/20:443,8443\"; an empty list means nothing outside the project), OR clear: true. The list replaces the one there. Running containers follow it within a minute and nothing restarts, so a container that needs a destination left off stops reaching it. The same as `snoutdata containers egress set|clear`.",
 		inputSchema: object({ ref: STRING, allow: { type: 'array', items: STRING }, clear: { type: 'boolean' } }, ['ref'])
 	},
 	{

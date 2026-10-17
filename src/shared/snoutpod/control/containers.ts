@@ -939,6 +939,10 @@ export function checkEgressDestination(input: string): string | { error: string 
 		return { error: `${input}: a wildcard cannot be looked up. List each host name, or the address range.` };
 	}
 	if (!EGRESS_HOST.test(text)) {
+		// One label and no dot ("localhost", "api") is a name only something local can resolve.
+		if (/^[a-z0-9-]{1,63}$/.test(text)) {
+			return { error: `${input} is not a whole host name. Give it with its domain, like api.example.com.` };
+		}
 		return { error: `${input} is not a host name, an IPv4 address or an IPv4 range.` };
 	}
 	return text;
@@ -946,20 +950,23 @@ export function checkEgressDestination(input: string): string | { error: string 
 
 /**
  * One destination as typed on a command line or in a form: `api.example.com`, `api.example.com:443`,
- * `203.0.113.0/24:443,8443`. No port means any port.
+ * `140.82.112.0/20:443,8443`. No port means any port.
  */
 export function parseEgressEntry(input: string): EgressAllowEntry | { error: string } {
 	const text = input.trim();
 	const colon = text.lastIndexOf(':');
 	// More than one colon is an IPv6 address, which checkEgressDestination names as such.
 	const split = colon !== -1 && text.indexOf(':') === colon;
-	const destination = checkEgressDestination(split ? text.slice(0, colon) : text);
-	if (typeof destination !== 'string') {
-		return destination;
-	}
-	const ports = egressPorts(split ? text.slice(colon + 1).split(',').map((one) => one.trim()) : [], destination);
+	const typed = split ? text.slice(0, colon) : text;
+	// The ports first: a port out of range is the plainer mistake, and `host:99999` should hear
+	// about 99999 rather than only about the name.
+	const ports = egressPorts(split ? text.slice(colon + 1).split(',').map((one) => one.trim()) : [], typed.trim());
 	if ('error' in ports) {
 		return ports;
+	}
+	const destination = checkEgressDestination(typed);
+	if (typeof destination !== 'string') {
+		return destination;
 	}
 	return { destination, ports };
 }
