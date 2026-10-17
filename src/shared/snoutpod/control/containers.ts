@@ -985,12 +985,17 @@ export function checkEgressAllow(value: unknown): { allow: EgressAllowEntry[] } 
 		if (typeof item === 'string') {
 			entry = parseEgressEntry(item);
 		} else if (item && typeof item === 'object' && typeof (item as { destination?: unknown }).destination === 'string') {
-			const destination = checkEgressDestination((item as { destination: string }).destination);
+			// The ports first, as parseEgressEntry does.
+			const typed = (item as { destination: string }).destination.trim();
+			const ports = egressPorts((item as { ports?: unknown }).ports, typed);
+			if ('error' in ports) {
+				return ports;
+			}
+			const destination = checkEgressDestination(typed);
 			if (typeof destination !== 'string') {
 				return destination;
 			}
-			const ports = egressPorts((item as { ports?: unknown }).ports, destination);
-			entry = 'error' in ports ? ports : { destination, ports };
+			entry = { destination, ports };
 		} else {
 			return { error: 'An allowlist entry is a destination and its ports.' };
 		}
