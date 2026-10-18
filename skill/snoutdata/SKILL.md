@@ -1,6 +1,6 @@
 ---
 name: snoutdata
-description: Create and manage SnoutData Cloud projects, each a hosted Postgres database with its backend, with the `snoutdata` CLI - a DATABASE_URL for a project, migrations, backups and point-in-time restore, auth, storage and the REST/GraphQL data API, Snout Functions (TypeScript on the edge) with their secrets, custom domains, API keys and usage. Use when the user wants a database, a backend, a DATABASE_URL, hosted auth/storage/functions, or mentions SnoutData.
+description: Create and manage SnoutData Cloud projects, each a hosted Postgres database with its backend, with the `snoutdata` CLI - a DATABASE_URL for a project, migrations, backups and point-in-time restore, auth, storage and the REST/GraphQL data API, Snout Functions (TypeScript on the edge) with their secrets, containers (a Docker image kept running), clusters (one database over several Postgres nodes), custom domains, API keys and usage. Use when the user wants a database, a backend, a DATABASE_URL, hosted auth/storage/functions, or mentions SnoutData.
 ---
 
 # SnoutData Cloud, through the `snoutdata` CLI
@@ -25,8 +25,10 @@ Everything is driven by one CLI. Nothing needs installing: every command below c
   in a committed file, a log, or your reply.
 - **Never pass a secret on a command line.** Set function secrets from stdin:
   `printf %s "$VALUE" | npx snoutdata secrets set NAME --stdin`.
-- Destructive commands (`projects delete`, `keys rotate`, `db restore --file` over data) need the
-  user's explicit go-ahead. Ask first.
+- Destructive commands (`projects delete`, `keys rotate`, `db restore --file` over data,
+  `containers delete`) need the user's explicit go-ahead. Ask first.
+- **A cluster change moves data and uses plan slots.** Run `cluster ... --plan` first, show the user
+  what moves and how long writes pause, and run it (with `--yes`) only on their go-ahead.
 - **Giving database access hands a person the database.** `db access grant` and `db access revoke`
   need the user's explicit go-ahead, with the address and level said back to them first. You cannot
   sign in that way yourself: the person approves in a browser.
@@ -74,11 +76,19 @@ in this folder or a parent. `init` writes that file.
 | List / delete functions | `npx snoutdata functions list\|delete NAME --json` |
 | Function secrets (names only are ever readable) | `npx snoutdata secrets list\|unset NAME --json` |
 | Your own domain for the project API (paid plans) | `npx snoutdata domains add api.example.com --json`, publish the printed records, then `domains verify api.example.com` |
+| Run a Docker image of yours as long as the project runs (Plus and Pro; image must include linux/arm64) | `npx snoutdata containers deploy NAME IMAGE --json` |
+| Containers: status and URL, logs, restart, delete | `npx snoutdata containers list\|logs NAME\|restart NAME\|delete NAME --json` |
+| Where containers may send | `npx snoutdata containers egress --json`, `containers egress set HOST,HOST` |
+| Make a project a cluster (one restart; each node uses a plan project slot) | `npx snoutdata cluster enable --project REF --plan --json`, then without `--plan` and with `--yes` |
+| A cluster's nodes, keyspaces, ranges, tables and jobs | `npx snoutdata cluster status --project REF --json` |
+| Add a node (joins and takes its share by itself) | `npx snoutdata cluster nodes add --project REF --json` |
+| Spread a table over the nodes by a column | `npx snoutdata cluster spread public.orders --column account_id --key-type bigint --project REF --plan --json` |
+| What happened to a cluster (node lost, failover, home down) | `npx snoutdata cluster alerts --project REF --json` |
 | TypeScript types for the schema | `npx snoutdata gen types typescript --out src/database.types.ts` |
 | The same Postgres locally, migrated and seeded | `npx snoutdata start` |
 
 The project API is `https://<ref>.api.snoutdata.com` (`/v1/data`, `/v1/graph`, `/v1/identity`,
-`/v1/files`, `/v1/live`, `/v1/fn/<name>`), with the key in the `Snout-Key` header. The server key
+`/v1/files`, `/v1/live`, `/v1/fn/<name>`, `/containers/v1/<name>/`), with the key in the `Snout-Key` header. The server key
 bypasses row-level security: keep it on a server, never in client code.
 
 Database sign-in (Postgres 18 projects): `read` reads the project's own tables (including rows
@@ -90,11 +100,18 @@ https://dashboard.snoutdata.com/#/db-device. Other drivers (node-postgres, JDBC)
 way yet: give them `db url`. A project on Postgres 17 is refused with a sentence; report it as is,
 and never suggest deleting or remaking the project.
 
+A cluster (Lepis) keeps the project's connection string and SQL; a table spread by a column has
+its rows on the node that owns each value, so a primary key must include that column. A statement
+it cannot run correctly across nodes is refused (SQLSTATE `0A000`) with a hint: report the hint.
+Clusters: https://docs.snoutdata.com/stack/lepis/overview.md. Containers:
+https://docs.snoutdata.com/stack/containers.md.
+
 ## As an MCP server
 
 `npx snoutdata mcp` serves the same operations as MCP tools over stdio (`list_projects`,
 `create_project`, `get_project`, `get_connection_url`, `set_product`, `usage`, `start_export`,
-`restore_to_point`, `deploy_function`, ...). Read-only tools are annotated so a client can run them
+`restore_to_point`, `deploy_function`, and `cluster_status`, `cluster_plan`, `cluster_run`, ...).
+`cluster_run` without `confirm: true` returns the plan and runs nothing. Read-only tools are annotated so a client can run them
 without asking. `delete_project` refuses unless the server was started with `--allow-delete`.
 
 ## When something is refused
