@@ -137,7 +137,23 @@ const VALUED = new Set([
 	// `shards settings --set advice_min_bytes=1,...`: any setting by its API name.
 	'set',
 	// `shards advise --sample-ms N`: how long the advisor measures write rates over.
-	'sample-ms'
+	'sample-ms',
+	// `ai models add --source openai --model gpt-4o-mini --base-url U --price-in 0.15 --price-out
+	// 0.6 --access-key-id ID --auth-header H`. The provider's key itself is never a flag: --stdin.
+	'source',
+	'model',
+	'base-url',
+	'price-in',
+	'price-out',
+	'access-key-id',
+	'auth-header',
+	// `ai keys create --models a,b`, `ai budgets set users --amount 0.5 --period day`,
+	// `ai usage --by model`, `ai test --prompt TEXT`.
+	'models',
+	'amount',
+	'period',
+	'by',
+	'prompt'
 ]);
 
 
@@ -274,7 +290,9 @@ const KNOWN_BOOLEANS = new Set([
 	// `upgrade --check`: say whether a newer version exists, and install nothing.
 	'check',
 	// `realtime inspect --watch`: keep printing what changes.
-	'watch'
+	'watch',
+	// `ai budgets set ... --soft`: warn in the log when it is passed, instead of refusing.
+	'soft'
 ]);
 
 function splitFlag(arg: string): [string, string | undefined] {

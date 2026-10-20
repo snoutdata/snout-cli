@@ -36,6 +36,7 @@ import * as db from './commands/db.js';
 import { accessCommand } from './commands/dbAccess.js';
 import * as manage from './commands/manage.js';
 import * as realtime from './commands/realtime.js';
+import * as ai from './commands/ai.js';
 import { authCommand } from './commands/auth.js';
 import { push } from './commands/push.js';
 import * as notifications from './commands/notifications.js';
@@ -107,6 +108,20 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
                                            channels open now: who, the roster, the last minute
   snoutdata realtime logs [--since 10m] [--channel C] [--ref R]
                                            connects, joins, leaves and disconnects, with why
+
+  snoutdata ai [--ref R]                   the project's own AI gateway: on or off, its models,
+                                           budgets and the last 30 days' spend
+  snoutdata ai enable|disable              switch it (on restarts the database once)
+  snoutdata ai models [add|remove]         what it serves; add one with its provider and key:
+  … | snoutdata ai models add [NAME] --source openai --model gpt-4o-mini --stdin
+                                           the key on stdin, proven with the provider first;
+                                           without --model, the steps to find the key and id
+  snoutdata ai providers [remove NAME]     where its models run, and whether their keys are set
+  snoutdata ai keys [create --name N [--models a,b] [--expires DAYS] | revoke ID]
+                                           keys for a server, the key shown once
+  snoutdata ai budgets [set project|users --amount 5 [--period day|month] [--soft] | remove ID]
+  snoutdata ai usage [--by model|day|key|user|provider] [--days 30]
+  snoutdata ai test [--model M] [--prompt TEXT]   one call through the project's door
 
   snoutdata domains [--ref R]              your own domains in front of the project's API
   snoutdata domains add|verify|remove <hostname> [--ref R]
@@ -745,6 +760,89 @@ async function run(args: ParsedArgs): Promise<number> {
 				return realtime.logs(ref(), { channel: flagString(args, 'channel'), since: flagString(args, 'since') });
 			}
 			throw new UsageError(`unknown command: realtime ${action}. realtime inspect|logs`);
+		}
+		case 'ai': {
+			const verb = rest[0];
+			switch (action) {
+				case undefined:
+				case 'status':
+					await ai.status(ref());
+					return 0;
+				case 'enable':
+				case 'disable':
+					await ai.setEnabled(ref(), action === 'enable');
+					return 0;
+				case 'models':
+					if (verb === undefined || verb === 'list') {
+						await ai.listModels(ref());
+						return 0;
+					}
+					if (verb === 'add') {
+						await ai.addModel(ref(), rest[1], {
+							source: flagString(args, 'source'),
+							upstream: flagString(args, 'model'),
+							provider: flagString(args, 'provider'),
+							baseUrl: flagString(args, 'base-url'),
+							region: flagString(args, 'region'),
+							priceIn: flagString(args, 'price-in'),
+							priceOut: flagString(args, 'price-out'),
+							accessKeyId: flagString(args, 'access-key-id'),
+							authHeader: flagString(args, 'auth-header'),
+							stdin: flagBoolean(args, 'stdin')
+						});
+						return 0;
+					}
+					if (verb === 'remove' || verb === 'delete') {
+						await ai.removeModel(ref(), rest[1]);
+						return 0;
+					}
+					throw new UsageError(`unknown command: ai models ${verb}. ai models [add|remove]`);
+				case 'providers':
+					if (verb === undefined || verb === 'list') {
+						await ai.listProviders(ref());
+						return 0;
+					}
+					if (verb === 'remove' || verb === 'delete') {
+						await ai.removeProvider(ref(), rest[1]);
+						return 0;
+					}
+					throw new UsageError(`unknown command: ai providers ${verb}. ai providers [remove NAME]`);
+				case 'keys':
+					if (verb === undefined || verb === 'list') {
+						await ai.listKeys(ref());
+						return 0;
+					}
+					if (verb === 'create') {
+						await ai.createKey(ref(), { name: flagString(args, 'name'), models: flagString(args, 'models'), expiresDays: flagNumber(args, 'expires') });
+						return 0;
+					}
+					if (verb === 'revoke') {
+						await ai.revokeKey(ref(), rest[1]);
+						return 0;
+					}
+					throw new UsageError(`unknown command: ai keys ${verb}. ai keys [create|revoke]`);
+				case 'budgets':
+					if (verb === undefined || verb === 'list') {
+						await ai.listBudgets(ref());
+						return 0;
+					}
+					if (verb === 'set') {
+						await ai.setBudget(ref(), rest[1], { amount: flagString(args, 'amount'), period: flagString(args, 'period'), soft: flagBoolean(args, 'soft') });
+						return 0;
+					}
+					if (verb === 'remove' || verb === 'delete') {
+						await ai.removeBudget(ref(), rest[1]);
+						return 0;
+					}
+					throw new UsageError(`unknown command: ai budgets ${verb}. ai budgets [set|remove]`);
+				case 'usage':
+					await ai.usage(ref(), { days: flagNumber(args, 'days'), by: flagString(args, 'by') });
+					return 0;
+				case 'test':
+					return ai.test(ref(), { model: flagString(args, 'model'), prompt: flagString(args, 'prompt') });
+				default:
+					throw new UsageError(`unknown command: ai ${action}. ai [enable|disable|models|providers|keys|budgets|usage|test]`);
+			}
 		}
 		case 'domains': {
 			await manage.domainsCommand(ref(), action, rest[0]);
