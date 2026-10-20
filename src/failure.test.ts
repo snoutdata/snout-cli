@@ -59,6 +59,7 @@ test('an HTTP status becomes something worth branching on', () => {
 	assert.equal(codeForStatus(404), 'not-found');
 	assert.equal(codeForStatus(409), 'conflict');
 	assert.equal(codeForStatus(429), 'quota');
+	assert.equal(codeForStatus(502, 'provider_billing'), 'quota');
 	assert.equal(codeForStatus(503), 'not-ready');
 	assert.equal(codeForStatus(500), 'server');
 	// Not a bucket for everything unrecognised: a 418 is a failure, not a server fault.

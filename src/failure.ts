@@ -145,7 +145,8 @@ export function codeForStatus(status: number, serverCode?: string | null): Failu
 	if (status === 409) {
 		return 'conflict';
 	}
-	if (status === 402 || status === 429) {
+	// An AI gateway whose provider account has no credit left says so in a 502.
+	if (status === 402 || status === 429 || serverCode === 'provider_billing') {
 		return 'quota';
 	}
 	if (status === 503) {
