@@ -35,6 +35,7 @@ import {
 	type Price,
 	type Provider,
 	type ProviderInput,
+	type Route,
 	type Transport,
 	type UsageBy,
 	type UsageRow,
@@ -432,6 +433,68 @@ export async function removeModel(ref: string, name: string | undefined): Promis
 	}
 	const answer = await gateway(ref).deleteModel(name);
 	emit(answer, () => say(answer.disabled ? `${name} comes from the gateway's providers file, so it was disabled rather than removed.` : `Removed ${name}.`));
+}
+
+// --- routes ------------------------------------------------------------------------------------
+
+/** `a, b,,c` as the names it holds. */
+export function nameList(text: string | undefined): string[] {
+	return (text ?? '')
+		.split(',')
+		.map((name) => name.trim())
+		.filter((name) => name !== '');
+}
+
+function routeTable(routes: readonly Route[]): string {
+	return table([
+		['ROUTE', 'TRIES, IN ORDER', 'SORT', 'SKIPS'],
+		...routes.map((r) => [r.name, r.tried.join(', ') || '-', r.sort, r.skipped.join(', ') || '-'])
+	]);
+}
+
+export async function listRoutes(ref: string): Promise<void> {
+	const routes = await gateway(ref).routes();
+	emit(routes, () => {
+		if (routes.length === 0) {
+			say(`No routes on ${ref}'s gateway. A route is one name for several models, each tried when the one before fails:`);
+			say(dim('  snoutdata ai routes set NAME --models first,second [--sort price]'));
+			return;
+		}
+		say(routeTable(routes));
+	});
+}
+
+export async function setRoute(ref: string, name: string | undefined, options: { models?: string; sort?: string }): Promise<void> {
+	if (!name) {
+		throw new UsageError('ai routes set needs the route\'s name: snoutdata ai routes set NAME --models first,second');
+	}
+	const targets = nameList(options.models);
+	if (targets.length === 0) {
+		throw new UsageError('ai routes set needs --models, the models to try in order, comma-separated (see `snoutdata ai models`)');
+	}
+	const sort = options.sort ?? 'order';
+	if (sort !== 'order' && sort !== 'price') {
+		throw new UsageError(`--sort is order (as written) or price (the cheapest first), not ${sort}`);
+	}
+	const psyche = gateway(ref);
+	await psyche.putRoute(name, { targets, sort });
+	const route = (await psyche.routes()).find((r) => r.name === name);
+	emit(route ?? { name, targets, sort }, () => {
+		const tried = route?.tried ?? targets;
+		say(`${bold(name)} tries ${tried.join(', then ')}${sort === 'price' ? ', the cheapest first' : ''}.`);
+		if (route && route.skipped.length > 0) {
+			warn(`skipped, not served: ${route.skipped.join(', ')}`);
+		}
+		say(dim(`  Call it as the model "${name}", or: snoutdata ai test --model ${name}`));
+	});
+}
+
+export async function removeRoute(ref: string, name: string | undefined): Promise<void> {
+	if (!name) {
+		throw new UsageError('ai routes remove needs the route\'s name (see `snoutdata ai routes`)');
+	}
+	await gateway(ref).deleteRoute(name);
+	emit({ name, removed: true }, () => say(`Removed the route ${name}. Its models are untouched.`));
 }
 
 // --- keys ------------------------------------------------------------------------------------------

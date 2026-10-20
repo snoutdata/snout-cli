@@ -27,6 +27,8 @@ export class UsageError extends Error {}
 /** Flags that take a value. Everything else is a boolean. */
 const VALUED = new Set([
 	'name',
+	// `ai routes set chat --models a,b --sort price`: the order a route tries its models in.
+	'sort',
 	// `db restore --at 2026-09-20T14:30:00Z`: the moment a point-in-time restore goes back to.
 	'at',
 	'region',

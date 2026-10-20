@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { ApiError } from '../api.js';
 import { UsageError } from '../args.js';
-import { chooseProvider, findSource, fromDay, inGatewayWords, parseScope, priceText, rate, sameBudget, scopeText } from './ai.js';
+import { chooseProvider, findSource, fromDay, inGatewayWords, nameList, parseScope, priceText, rate, sameBudget, scopeText } from './ai.js';
 import type { Budget, Provider } from '../shared/psyche-admin/index.ts';
 
 function provider(name: string, kind: Provider['kind'], base_url: string): Provider {
@@ -89,5 +89,13 @@ describe('ai budgets set', () => {
 	test('the scope is project or users', () => {
 		assert.equal(parseScope('users'), 'users');
 		assert.throws(() => parseScope('everyone'), UsageError);
+	});
+});
+
+describe('nameList', () => {
+	test('a comma-separated list, trimmed, with no empty names', () => {
+		assert.deepEqual(nameList(' claude-sonnet, gpt-4o,,openai/gpt-4o-mini '), ['claude-sonnet', 'gpt-4o', 'openai/gpt-4o-mini']);
+		assert.deepEqual(nameList(undefined), []);
+		assert.deepEqual(nameList(' , '), []);
 	});
 });

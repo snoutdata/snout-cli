@@ -119,6 +119,29 @@ export interface ModelInput {
 	access?: 'everyone' | 'granted'
 }
 
+/** A name a caller asks for that stands for several models, tried in turn when one fails for a
+ *  reason that is not the caller's. */
+export interface Route {
+	name: string
+	/** The models, as written. */
+	targets: string[]
+	/** `order`: as written; `price`: the cheapest first. */
+	sort: 'order' | 'price'
+	origin: 'file' | 'api'
+	created_at: string
+	updated_at: string
+	/** What it tries now, in that order: the targets that are served, sorted. */
+	tried: string[]
+	/** Targets it skips, because they are not served (disabled, removed, or left out). */
+	skipped: string[]
+	served: boolean
+}
+
+export interface RouteInput {
+	targets: string[]
+	sort?: 'order' | 'price'
+}
+
 /** Everything `model` is, as a `PUT` would write it again unchanged. */
 export function modelInput(model: Model): ModelInput {
 	const input: ModelInput = {
@@ -305,6 +328,10 @@ export interface RequestRow {
 	credits: boolean
 	/** The soft budgets it went over. */
 	budget_warning: string | null
+	/** The route the caller named (`models` for OpenRouter's list); null for a model. */
+	route: string | null
+	/** Which try of the call this row was, from 1; null on rows logged before routes. */
+	attempt: number | null
 }
 
 export interface RequestsQuery {
@@ -352,6 +379,17 @@ export class PsycheAdmin {
 	/** Removes a model; one from the providers file is disabled instead. */
 	deleteModel(name: string): Promise<{ name: string; deleted: boolean; disabled: boolean }> {
 		return this.call('DELETE', `admin/models/${modelPath(name)}`)
+	}
+
+	routes(): Promise<Route[]> {
+		return this.list('admin/routes')
+	}
+	/** Makes or replaces a route. Its name may hold `/`, as a model's may. */
+	putRoute(name: string, input: RouteInput): Promise<{ name: string; targets: string[]; sort: string; origin: string }> {
+		return this.call('PUT', `admin/routes/${modelPath(name)}`, input)
+	}
+	deleteRoute(name: string): Promise<void> {
+		return this.none('DELETE', `admin/routes/${modelPath(name)}`)
 	}
 
 	credentials(): Promise<Credential[]> {

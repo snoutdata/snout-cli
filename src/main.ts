@@ -117,6 +117,8 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
                                            the key on stdin, proven with the provider first;
                                            without --model, the steps to find the key and id
   snoutdata ai providers [remove NAME]     where its models run, and whether their keys are set
+  snoutdata ai routes [set NAME --models a,b [--sort price] | remove NAME]
+                                           one name for several models, tried in turn
   snoutdata ai keys [create --name N [--models a,b] [--expires DAYS] | revoke ID]
                                            keys for a server, the key shown once
   snoutdata ai budgets [set project|users --amount 5 [--period day|month] [--soft] | remove ID]
@@ -807,6 +809,20 @@ async function run(args: ParsedArgs): Promise<number> {
 						return 0;
 					}
 					throw new UsageError(`unknown command: ai providers ${verb}. ai providers [remove NAME]`);
+				case 'routes':
+					if (verb === undefined || verb === 'list') {
+						await ai.listRoutes(ref());
+						return 0;
+					}
+					if (verb === 'set') {
+						await ai.setRoute(ref(), rest[1], { models: flagString(args, 'models'), sort: flagString(args, 'sort') });
+						return 0;
+					}
+					if (verb === 'remove' || verb === 'delete') {
+						await ai.removeRoute(ref(), rest[1]);
+						return 0;
+					}
+					throw new UsageError(`unknown command: ai routes ${verb}. ai routes [set NAME --models a,b | remove NAME]`);
 				case 'keys':
 					if (verb === undefined || verb === 'list') {
 						await ai.listKeys(ref());
