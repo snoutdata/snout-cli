@@ -100,6 +100,18 @@ export interface Model {
 	/** How many users and groups it is granted to. */
 	grants: number
 	problem: string | null
+	/** What it can take, as written; null when it says nothing, which keeps it out of `auto`. */
+	fits: Fits | null
+}
+
+/** What a model can take: its whole window in tokens, and whether it takes tools, images and a
+ *  reply held to a JSON schema. `auto` chooses only among models that write these, and every route
+ *  leaves out a model whose facts rule a request out. */
+export interface Fits {
+	context?: number | null
+	tools?: boolean
+	images?: boolean
+	json_schema?: boolean
 }
 
 /** A model as `PUT` takes it. The PUT REPLACES the model, so a field left out is reset (access to
@@ -115,6 +127,8 @@ export interface ModelInput {
 	embeddings?: string
 	/** Its own price; left out, the shipped catalogue's, or none. */
 	price?: Price
+	/** What it can take. Unlike the rest, left out it is KEPT as it was; `{}` clears it. */
+	fits?: Fits
 	enabled?: boolean
 	access?: 'everyone' | 'granted'
 }
@@ -191,6 +205,9 @@ export function modelInput(model: Model): ModelInput {
 	}
 	if (model.own_price !== null) {
 		input.price = model.own_price
+	}
+	if (model.fits) {
+		input.fits = model.fits
 	}
 	return input
 }
@@ -361,6 +378,9 @@ export interface RequestRow {
 	route: string | null
 	/** Which try of the call this row was, from 1; null on rows logged before routes. */
 	attempt: number | null
+	/** For `auto`, a route or a list: the order its models were tried in, and each left out with
+	 *  its reason. Null for a model named alone, and on rows logged before Psyche 0.1.7. */
+	routing: string | null
 }
 
 export interface RequestsQuery {
