@@ -39,6 +39,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
@@ -46,6 +47,7 @@ import { request as httpsRequest } from 'node:https';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { call } from '../api.js';
+import { UploadFailed, uploadArchive, type UploadAnswer, type UploadTransport } from '../shared/snoutpod/control/containerUpload.js';
 import { bold, dim, emit, say, table } from '../output.js';
 import {
 	checkContainerName,
@@ -300,8 +302,10 @@ export interface DockerfileIo {
 	scratch(): Promise<string>;
 	remove(dir: string): Promise<void>;
 	size(path: string): Promise<number>;
-	/** PUT the file to the URL, streamed. The answer's status and body. */
-	upload(url: string, file: string): Promise<{ status: number; body: string }>;
+	/** The file's SHA-256, hex, read as a stream. */
+	hash(path: string): Promise<string>;
+	/** The upload's requests: three small ones through the door and the archive straight to storage (CT30). */
+	readonly transport: UploadTransport;
 	ask<T>(body: Record<string, unknown>): Promise<T>;
 	say(line: string): void;
 	now(): number;
@@ -316,36 +320,68 @@ function docker(args: readonly string[]): Promise<number> {
 	});
 }
 
-/** A file PUT to a URL, streamed from disk with its length, never held in memory. */
-function uploadFile(url: string, file: string, length: number): Promise<{ status: number; body: string }> {
+/** The answer to a request, read whole: they are all small. */
+function send(
+	url: string,
+	method: string,
+	headers: Readonly<Record<string, string>>,
+	body: (request: ReturnType<typeof httpsRequest>) => void
+): Promise<UploadAnswer> {
 	return new Promise((resolve, reject) => {
 		const target = new URL(url);
-		const request = (target.protocol === 'http:' ? httpRequest : httpsRequest)(target, {
-			method: 'PUT',
-			headers: { 'content-type': 'application/octet-stream', 'content-length': String(length) }
-		});
+		const request = (target.protocol === 'http:' ? httpRequest : httpsRequest)(target, { method, headers });
 		request.on('response', (response) => {
 			const chunks: Buffer[] = [];
 			response.on('data', (chunk: Buffer) => chunks.push(chunk));
 			response.on('end', () => resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }));
 			response.on('error', reject);
 		});
-		request.on('error', reject);
-		const stream = createReadStream(file);
-		stream.on('error', (error) => {
-			request.destroy();
+		request.on('error', (error) => {
 			reject(error);
 		});
+		body(request);
+	});
+}
+
+/**
+ * A file PUT to a URL, streamed from disk with its length, never held in memory. With `headers`
+ * from a presigned place they are sent exactly, since they are signed; with none (the legacy PUT
+ * through the door) the length and type are ours.
+ */
+async function uploadFile(url: string, file: string, headers: Readonly<Record<string, string>>): Promise<UploadAnswer> {
+	const sent =
+		Object.keys(headers).length > 0 ? headers : { 'content-type': 'application/octet-stream', 'content-length': String((await stat(file)).size) };
+	return send(url, 'PUT', sent, (request) => {
+		const stream = createReadStream(file);
+		stream.on('error', (error) => request.destroy(error));
 		stream.pipe(request);
 	});
 }
+
+function sha256File(path: string): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const hash = createHash('sha256');
+		createReadStream(path)
+			.on('error', reject)
+			.on('data', (chunk) => hash.update(chunk))
+			.on('end', () => resolve(hash.digest('hex')));
+	});
+}
+
+const realTransport: UploadTransport = {
+	call: (method, url, headers) => send(url, method, { 'content-length': '0', ...headers }, (request) => request.end()),
+	put: uploadFile,
+	sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+	now: () => Date.now()
+};
 
 const realIo: DockerfileIo = {
 	docker,
 	scratch: () => mkdtemp(join(tmpdir(), 'snoutdata-build-')),
 	remove: (dir) => rm(dir, { recursive: true, force: true }),
 	size: async (path) => (await stat(path)).size,
-	upload: async (url, file) => uploadFile(url, file, (await stat(file)).size),
+	hash: sha256File,
+	transport: realTransport,
 	ask: (body) => call('cloud-project-containers', body),
 	say: (line) => say(dim(line)),
 	now: () => Date.now()
@@ -403,21 +439,27 @@ export async function buildAndUpload(
 			if (!(Date.parse(ticket.expiresAt) - io.now() > TICKET_MARGIN_MS)) {
 				ticket = await uploadTicket(io, ref, name);
 			}
+			const sha256 = await io.hash(archive);
 			io.say(`${name}: uploading the image (${megabytes(size)})`);
-			const answer = await io.upload(ticket.url, archive);
-			if (answer.status !== 200) {
-				throw new Error(uploadFailure(answer.status, answer.body));
-			}
-			let digest = '';
 			try {
-				digest = String((JSON.parse(answer.body) as { digest?: unknown }).digest ?? '');
-			} catch {
-				// Checked below.
+				return await uploadArchive({
+					ticketUrl: ticket.url,
+					file: archive,
+					bytes: size,
+					sha256,
+					transport: io.transport,
+					step: (step) => {
+						if (step === 'storing') {
+							io.say(`${name}: storing the image in the project`);
+						}
+					}
+				});
+			} catch (error) {
+				if (error instanceof UploadFailed) {
+					throw new Error(uploadFailure(error.status, error.body));
+				}
+				throw error;
 			}
-			if (!/^sha256:[0-9a-f]{64}$/.test(digest)) {
-				throw new Error('the upload finished without saying what it stored, so there is nothing to deploy; build again.');
-			}
-			return digest;
 		} finally {
 			await io.remove(scratch).catch(() => undefined);
 		}

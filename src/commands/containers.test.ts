@@ -27,11 +27,21 @@ const TICKET_URL = `https://r1abcdefghijk.api.snoutdata.com/containers/v1/_uploa
 /** What a leaked infrastructure name would look like; none of it may reach the person. */
 const LEAKY = /amazonaws|dkr\.ecr|\b\d{12}\b|arn:aws|docker login|registry login/i;
 
-function fakeIo(options: { upload?: { status: number; body: string }; size?: number; deployError?: string; expiresInMs?: number } = {}) {
+const PLACE = 'https://cohort.s3.us-west-2.amazonaws.com/r1abcdefghijk/uploads/x.tar?X-Amz-Signature=1';
+
+/**
+ * `upload` is the answer to the archive's PUT. A door from before CT30 answers the first POST with
+ * 405 and takes the archive itself, which is what these tests drive unless `presigned` is set; then
+ * the door hands out a place in storage and the digest comes back from a poll.
+ */
+function fakeIo(
+	options: { upload?: { status: number; body: string }; size?: number; deployError?: string; expiresInMs?: number; presigned?: boolean } = {}
+) {
 	const said: string[] = [];
 	const docker: string[][] = [];
 	const asked: Record<string, unknown>[] = [];
 	const uploads: string[] = [];
+	const calls: string[] = [];
 	const removed: string[] = [];
 	const io: DockerfileIo = {
 		docker: async (args) => {
@@ -43,9 +53,30 @@ function fakeIo(options: { upload?: { status: number; body: string }; size?: num
 			removed.push(dir);
 		},
 		size: async () => options.size ?? 40 * 1024 * 1024,
-		upload: async (url) => {
-			uploads.push(url);
-			return options.upload ?? { status: 200, body: JSON.stringify({ name: 'wa', digest: DIGEST }) };
+		hash: async () => 'c'.repeat(64),
+		transport: {
+			call: async (method, url) => {
+				calls.push(`${method} ${url}`);
+				if (!options.presigned) {
+					return { status: 405, body: JSON.stringify({ message: 'An image is uploaded with PUT.' }) };
+				}
+				if (method === 'POST' && url === TICKET_URL) {
+					return { status: 200, body: JSON.stringify({ url: PLACE, headers: { 'content-length': '1' }, expiresAt: '2026-10-20T00:15:00Z' }) };
+				}
+				if (method === 'POST') {
+					return { status: 202, body: JSON.stringify({ state: 'storing' }) };
+				}
+				return { status: 200, body: JSON.stringify({ state: 'stored', name: 'wa', digest: DIGEST }) };
+			},
+			put: async (url) => {
+				uploads.push(url);
+				if (options.presigned && options.upload === undefined) {
+					return { status: 200, body: '' };
+				}
+				return options.upload ?? { status: 200, body: JSON.stringify({ name: 'wa', digest: DIGEST }) };
+			},
+			sleep: async () => undefined,
+			now: () => Date.now()
 		},
 		ask: async <T>(body: Record<string, unknown>): Promise<T> => {
 			asked.push(body);
@@ -60,7 +91,7 @@ function fakeIo(options: { upload?: { status: number; body: string }; size?: num
 		say: (line) => said.push(line),
 		now: () => Date.now()
 	};
-	return { io, said, docker, asked, uploads, removed };
+	return { io, said, docker, asked, uploads, calls, removed };
 }
 
 test('--dockerfile asks for a link, builds an archive, uploads it there and returns the stored digest', async () => {
@@ -133,4 +164,13 @@ test('containers egress: a destination that is not one is a sentence before anyt
 	);
 	assert.match(listed, /may reach only:\n  api\.example\.com:443\n  140\.82\.112\.0\/20  \(any port\)\n  and always: abc\.db\.snoutdata\.com:5432, and each other/);
 	assert.match(plain(describeAllowlist({ ref: 'abc', allowance: null, containers: [], allowlist: { allow: [], updatedAt: '', alwaysAllowed: [] } })), /nothing outside the project/);
+});
+
+test('--dockerfile through storage: the archive goes to the place the door names, and the digest comes back from a poll', async () => {
+	const { io, uploads, calls, said } = fakeIo({ presigned: true });
+	assert.equal(await buildAndUpload('r1', 'wa', { context: '/app', file: null }, io), DIGEST);
+	assert.deepEqual(uploads, [PLACE], 'the archive went somewhere other than the place');
+	assert.deepEqual(calls, [`POST ${TICKET_URL}`, `POST ${TICKET_URL}/done`, `GET ${TICKET_URL}`]);
+	assert.ok(said.some((line) => /storing the image/.test(line)));
+	assert.ok(said.every((line) => !LEAKY.test(line)));
 });
