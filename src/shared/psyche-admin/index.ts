@@ -125,8 +125,9 @@ export interface Route {
 	name: string
 	/** The models, as written. */
 	targets: string[]
-	/** `order`: as written; `price`: the cheapest first. */
-	sort: 'order' | 'price'
+	/** `order`: as written; `price`: the cheapest first; `latency` and `throughput`: the fastest first,
+	 *  as measured (see {@link TargetHealth}), a model not yet measured ahead of them. */
+	sort: 'order' | 'price' | 'latency' | 'throughput'
 	origin: 'file' | 'api'
 	created_at: string
 	updated_at: string
@@ -137,9 +138,37 @@ export interface Route {
 	served: boolean
 }
 
+/** What one target (a model, by its provider) did lately, as Psyche measures it from its own calls.
+ *  A target that failed three times in a row cools down: a route tries it last until a probe call
+ *  answers. */
+export interface TargetHealth {
+	provider: string
+	model: string
+	state: 'ok' | 'cooling' | 'probing'
+	/** In the last five minutes. */
+	requests: number
+	failed: number
+	rate_limited: number
+	/** `failed / requests`; null with no requests. */
+	error_rate: number | null
+	/** Moving averages; null until measured. */
+	first_byte_ms: number | null
+	tokens_per_second: number | null
+	failures_in_a_row: number
+	/** Unix seconds, while it is cooling. */
+	cooling_until: number | null
+	/** The class of the last failure, as an error's `code`. */
+	last_failure: string | null
+	/** What the provider says is left on Psyche's credential, from its rate-limit headers. */
+	remaining_requests: number | null
+	remaining_tokens: number | null
+	/** Unix seconds. */
+	updated_at: number | null
+}
+
 export interface RouteInput {
 	targets: string[]
-	sort?: 'order' | 'price'
+	sort?: 'order' | 'price' | 'latency' | 'throughput'
 }
 
 /** Everything `model` is, as a `PUT` would write it again unchanged. */
@@ -390,6 +419,10 @@ export class PsycheAdmin {
 	}
 	deleteRoute(name: string): Promise<void> {
 		return this.none('DELETE', `admin/routes/${modelPath(name)}`)
+	}
+	/** Each target's health, as Psyche holds it now. */
+	health(): Promise<TargetHealth[]> {
+		return this.list('admin/health')
 	}
 
 	credentials(): Promise<Credential[]> {

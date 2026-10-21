@@ -473,15 +473,15 @@ export async function setRoute(ref: string, name: string | undefined, options: {
 		throw new UsageError('ai routes set needs --models, the models to try in order, comma-separated (see `snoutdata ai models`)');
 	}
 	const sort = options.sort ?? 'order';
-	if (sort !== 'order' && sort !== 'price') {
-		throw new UsageError(`--sort is order (as written) or price (the cheapest first), not ${sort}`);
+	if (sort !== 'order' && sort !== 'price' && sort !== 'latency' && sort !== 'throughput') {
+		throw new UsageError(`--sort is order (as written), price (the cheapest first), latency or throughput (the fastest first, as measured), not ${sort}`);
 	}
 	const psyche = gateway(ref);
 	await psyche.putRoute(name, { targets, sort });
 	const route = (await psyche.routes()).find((r) => r.name === name);
 	emit(route ?? { name, targets, sort }, () => {
 		const tried = route?.tried ?? targets;
-		say(`${bold(name)} tries ${tried.join(', then ')}${sort === 'price' ? ', the cheapest first' : ''}.`);
+		say(`${bold(name)} tries ${tried.join(', then ')}${sort === 'price' ? ', the cheapest first' : sort === 'latency' || sort === 'throughput' ? `, the fastest first by ${sort} once measured` : ''}.`);
 		if (route && route.skipped.length > 0) {
 			warn(`skipped, not served: ${route.skipped.join(', ')}`);
 		}

@@ -231,7 +231,7 @@ const FLAG_HELP: Record<string, string> = {
 	'--models': 'Comma-separated models the key may call (default: every one)',
 	'ai keys create --name': 'What the key is for, shown in ai keys',
 	'ai routes set --models': 'The models to try, comma-separated, in order',
-	'ai routes set --sort': 'order (as written, the default) or price (the cheapest first)',
+	'ai routes set --sort': 'order (as written, the default), price (the cheapest first), or latency or throughput (the fastest first, as measured)',
 	'ai keys create --expires': 'Days until the key stops working. Without it, it works until revoked',
 	'--amount': 'Dollars',
 	'--period': 'day (the default) or month',
