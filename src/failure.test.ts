@@ -59,8 +59,13 @@ test('an HTTP status becomes something worth branching on', () => {
 	assert.equal(codeForStatus(404), 'not-found');
 	assert.equal(codeForStatus(409), 'conflict');
 	assert.equal(codeForStatus(429), 'quota');
-	assert.equal(codeForStatus(502, 'provider_billing'), 'quota');
+	assert.equal(codeForStatus(503, 'provider_billing'), 'quota');
 	assert.equal(codeForStatus(503), 'not-ready');
+	// The AI gateway's 503s: a refused credential is never "ask again shortly".
+	assert.equal(codeForStatus(503, 'provider_auth'), 'server');
+	assert.equal(codeForStatus(503, 'upstream_error'), 'server');
+	assert.equal(codeForStatus(503, 'timeout'), 'timeout');
+	assert.equal(codeForStatus(503, 'service_unreachable'), 'not-ready');
 	assert.equal(codeForStatus(500), 'server');
 	// Not a bucket for everything unrecognised: a 418 is a failure, not a server fault.
 	assert.equal(codeForStatus(418), 'failed');
@@ -270,4 +275,13 @@ test('a refusal is a sentence, never a page of markup', async () => {
 	assert.ok(!html.includes('<'), html);
 	assert.match(html, /502 Bad Gateway/);
 	assert.equal(unreadableAnswer(500, '', 'plain words'), 'plain words');
+});
+
+test("the server's code is read at the top of the body, or inside the AI gateway's error object", async () => {
+	const { serverCodeOf } = await import('./api.js');
+	assert.equal(serverCodeOf({ error: 'Region is full.', code: 'no-capacity' }), 'no-capacity');
+	assert.equal(serverCodeOf({ error: { message: 'openai refused this credential', type: 'api_error', code: 'provider_auth' } }), 'provider_auth');
+	assert.equal(serverCodeOf({ error: 'no code here' }), null);
+	assert.equal(serverCodeOf('error code: 502'), null);
+	assert.equal(serverCodeOf(null), null);
 });

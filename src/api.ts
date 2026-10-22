@@ -229,13 +229,27 @@ export async function call<T>(
 		if (response.status === 410) {
 			throw outdated(response, message);
 		}
-		const serverCode =
-			typeof parsed === 'object' && parsed && 'code' in parsed && typeof (parsed as { code: unknown }).code === 'string'
-				? (parsed as { code: string }).code
-				: null;
-		throw new ApiError(response.status, message, serverCode, parsed);
+		throw new ApiError(response.status, message, serverCodeOf(parsed), parsed);
 	}
 	return parsed as T;
+}
+
+/**
+ * The server's `code`: ours at the top of the body, or the AI gateway's inside its OpenAI-shaped
+ * `error` object (`{"error": {"message", "code"}}`), which the control plane relays as it is.
+ */
+export function serverCodeOf(parsed: unknown): string | null {
+	if (typeof parsed !== 'object' || parsed === null) {
+		return null;
+	}
+	const { code, error } = parsed as { code?: unknown; error?: unknown };
+	if (typeof code === 'string') {
+		return code;
+	}
+	if (typeof error === 'object' && error !== null && typeof (error as { code?: unknown }).code === 'string') {
+		return (error as { code: string }).code;
+	}
+	return null;
 }
 
 /**

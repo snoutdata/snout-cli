@@ -115,6 +115,9 @@ export function fail(code: FailureCode, message: string, details?: Record<string
 	throw new CliFailure(code, message, details);
 }
 
+/** The AI gateway's codes for a provider that failed it: ours to fix, never "ask again shortly". */
+const AI_PROVIDER_FAILURES: ReadonlySet<string> = new Set(['provider_auth', 'upstream_error', 'transport', 'egress_refused'])
+
 /**
  * An HTTP status as a failure code, with the server's own `code` when it sent one.
  *
@@ -145,9 +148,18 @@ export function codeForStatus(status: number, serverCode?: string | null): Failu
 	if (status === 409) {
 		return 'conflict';
 	}
-	// An AI gateway whose provider account has no credit left says so in a 502.
+	// An AI gateway whose provider account has no credit left says so in its code.
 	if (status === 402 || status === 429 || serverCode === 'provider_billing') {
 		return 'quota';
+	}
+	// The AI gateway answers every provider failure 503 (a 502 or 504 is replaced at Cloudflare's
+	// edge, code and all), so its code, and not the status, says whether asking again helps: a
+	// refused credential never does.
+	if (serverCode === 'timeout') {
+		return 'timeout';
+	}
+	if (serverCode !== undefined && serverCode !== null && AI_PROVIDER_FAILURES.has(serverCode)) {
+		return 'server';
 	}
 	if (status === 503) {
 		return 'not-ready';
