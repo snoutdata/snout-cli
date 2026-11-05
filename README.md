@@ -60,8 +60,9 @@ export SNOUTDATA_ACCESS_TOKEN=sdt_...   # made once by a person: snoutdata token
 `--expires`. Made with `--project REF`, it reaches that one project and nothing else. It is what
 CI and an agent
 should use: a script's behaviour should not depend on who happens to be logged in on the machine
-it runs on. Failing that, `~/.snoutdata/auth.json` (written by `snoutdata login`, mode 0600),
-whose session renews itself as it is used.
+it runs on. Failing that, the profile's session: `~/.snoutdata/auth.json` (written by
+`snoutdata login`, mode 0600), or `~/.snoutdata/auth.NAME.json` for a named profile, whose session
+renews itself as it is used.
 
 The token is exchanged for a short-lived session by the control plane, so row-level security is
 still the only thing deciding what it can see.
@@ -95,13 +96,15 @@ snoutdata link --ref R                # point this folder at an existing project
 **Auth**
 
 ```bash
-snoutdata login                       # through a browser
+snoutdata login                       # a sign-in page: Google, GitHub or your work email
+snoutdata login --provider github     # straight to one provider
 snoutdata login --sso                 # your company's identity provider; asks for a work email
 snoutdata login --sso --domain acme.com   # or name the domain and skip the question
 snoutdata login --device              # print a code to type into a browser anywhere
 snoutdata login --no-browser          # print the URL instead of opening one
-snoutdata logout
-snoutdata whoami
+snoutdata login --profile acme        # a second account, kept beside the first
+snoutdata logout [--all]              # this profile, or every one
+snoutdata whoami [--all]              # --all: every profile signed in here
 snoutdata tokens create --name ci [--expires DAYS] [--project REF]
 snoutdata tokens list
 snoutdata tokens revoke <id|sdt_prefix>
@@ -114,6 +117,8 @@ snoutdata projects list
 snoutdata projects create --name X [--region R] [--no-wait]
 snoutdata projects pause|resume|delete [--ref R]
 snoutdata usage [--ref R] [--days 30] [--history]
+snoutdata usage --tables [--limit 20]             # and the largest tables
+snoutdata metrics [--ref R] [--node REF] [--window hour|day|week]
 snoutdata teams
 ```
 
@@ -122,7 +127,10 @@ snoutdata teams
 ```bash
 snoutdata db url [--ref R]                        # a connection string
 snoutdata db psql [--ref R] [-- ...]              # opens psql, no password typed
-snoutdata db reset-password [--ref R]
+snoutdata db query "SQL" [--ref R]                # run SQL, no psql needed; rows as a table
+snoutdata db run FILE.sql [--ref R]               # a file in one transaction, no psql needed
+snoutdata db slow [--limit 10]                    # the statements that took the most time
+snoutdata db reset-password [--grace 60]          # new password, other owner login; old one works 60 min
 snoutdata db access [--ref R]                     # who signs in as themselves (Postgres 18)
 snoutdata db access grant EMAIL [--level full|read]   # prints their connection string
 snoutdata db access revoke EMAIL|ROLE
@@ -131,12 +139,13 @@ snoutdata db push [--dir migrations] [--dry-run]  # run the .sql files, once eac
 snoutdata db restore --file DUMP [--force]
 ```
 
-`db push` needs nothing installed: it connects to the database itself and sends each file a
-statement at a time, cut where `psql` would cut it. A file holding a `psql` command (`\i`, `\set`)
-is refused before anything runs. `db psql`, `db restore` and `gen types` use the Postgres client
-tools.
+`db push`, `db query`, `db run` and `db slow` need nothing installed: they connect to the database
+themselves and send SQL a statement at a time, cut where `psql` would cut it. A file holding a
+`psql` command (`\i`, `\set`) is refused before anything runs. `db run`, and a `db query` with
+several statements, runs them in one transaction: the first that fails rolls it all back and the
+error names it. `db psql`, `db restore` and `gen types` use the Postgres client tools.
 
-`db psql`, `db push`, `db restore` and `gen types` verify the database's certificate
+`db psql`, `db push`, `db query`, `db run`, `db restore` and `gen types` verify the database's certificate
 (`sslmode=verify-full`, against Node's trusted roots). `SNOUTDATA_DB_SSLMODE=require` turns the
 check off, for a network that re-signs Postgres traffic.
 
@@ -189,7 +198,12 @@ Every command takes `--json`, `--quiet` and `--help`, and anything that waits ta
 **A project**, in order: `--ref`, then `SNOUTDATA_PROJECT`, then `.snoutdata/project.json` in
 this folder or a parent.
 
-**A token**, in order: `SNOUTDATA_ACCESS_TOKEN`, then `~/.snoutdata/auth.json`.
+**A token**, in order: `SNOUTDATA_ACCESS_TOKEN`, then the profile's session
+(`~/.snoutdata/auth.json`, or `auth.NAME.json` for a profile).
+
+**A profile**, in order: `--profile`, then `SNOUTDATA_PROFILE`, then the profile recorded in
+`.snoutdata/project.json` (`link --profile NAME` writes it), then the default. Any command takes
+`--profile`, so one machine stays signed in to several accounts.
 
 **Sign-in, when there is no credential and a person is present**, in order: SnoutData
 Studio if it is running here and willing, then a browser, then a pairing code for a

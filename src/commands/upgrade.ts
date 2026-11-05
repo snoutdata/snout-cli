@@ -71,6 +71,27 @@ async function latestVersion(): Promise<string> {
 	return body.version;
 }
 
+/**
+ * The newest published version when it is newer than this one, for `--version` to mention; null
+ * when this is the newest, the registry is slow or unreachable, or anything else goes wrong. A
+ * courtesy, so it never throws and never waits more than `timeoutMs`.
+ */
+export async function newerVersion(timeoutMs = 1500): Promise<string | null> {
+	try {
+		const response = await fetch(`${REGISTRY}/snoutdata/latest`, {
+			headers: { accept: 'application/json' },
+			signal: AbortSignal.timeout(timeoutMs)
+		});
+		if (!response.ok) {
+			return null;
+		}
+		const body = (await response.json()) as { version?: unknown };
+		return typeof body.version === 'string' && olderThan(VERSION, body.version) ? body.version : null;
+	} catch {
+		return null;
+	}
+}
+
 async function download(url: string): Promise<Buffer> {
 	let response: Response;
 	try {

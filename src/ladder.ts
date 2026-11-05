@@ -4,7 +4,7 @@
  * The rungs, in order, and the order is the whole design:
  *
  *   1. `SNOUTDATA_ACCESS_TOKEN`     read in `config.ts`, before any of this
- *   2. `~/.snoutdata/auth.json`     the stored session, likewise
+ *   2. `~/.snoutdata/auth.json`     the stored session, likewise (`auth.NAME.json` for a profile)
  *   3. the desktop app              running here, signed in, and willing to mint
  *   4. a browser                    the ordinary sign-in, the same as `snoutdata login`
  *   5. a pairing code               when the browser could not be used
@@ -31,7 +31,7 @@
  */
 
 import { createInterface } from 'node:readline/promises';
-import { writeAuth, type StoredAuth } from './config.js';
+import { currentProfile, DEFAULT_PROFILE, writeAuth, type StoredAuth } from './config.js';
 import * as desktop from './desktop.js';
 import * as device from './device.js';
 import { canAsk } from './interactive.js';
@@ -67,7 +67,12 @@ async function fromDesktop(): Promise<StoredAuth | null> {
 	}
 	const who = look.who.email ?? 'the signed-in account';
 	say('');
+	const profile = currentProfile();
 	say(`SnoutData Studio is open here, signed in as ${bold(who)}.`);
+	if (profile !== DEFAULT_PROFILE) {
+		// The token is kept as this profile's, so the person agreeing should see which one.
+		say(`Its token would be kept as profile ${bold(profile)}.`);
+	}
 	say(dim('It can create an access token for this terminal. Your sign-in itself is not handed over,'));
 	say(dim('and you can revoke the token later with `snoutdata tokens revoke`.'));
 	if (!(await confirm('Use it?'))) {

@@ -36,15 +36,20 @@ import { UsageError, flagBoolean, flagString, type ParsedArgs } from '../args.js
 import { CliFailure } from '../failure.js';
 import { canAsk } from '../interactive.js';
 import { bold, dim, emit, say, table } from '../output.js';
+import { describeCompute } from '../usage.js';
 import {
 	ADVICE_SETTINGS,
+	AUTOPILOT_MODES,
 	CloudShardsClient,
 	SETTINGS,
 	describeCloudAnswer,
 	isFinished,
 	shardsClient,
 	type Advice,
+	type DesignCheck,
 	type AdviceSettingName,
+	type AutopilotMode,
+	type AutopilotState,
 	type CloudPod,
 	type CloudShardsView,
 	type ClusterAlert,
@@ -71,6 +76,7 @@ const DESTRUCTIVE = new Set([
 	'table.distribute',
 	'table.reference',
 	'table.global',
+	'table.auto',
 	'range.split',
 	'range.merge',
 	'range.move',
@@ -89,7 +95,7 @@ const SETTING_FLAGS: Record<SettingName, string> = {
 	copy_mb_per_s: 'copy-mb-per-s'
 };
 
-const OP_HELP = 'nodes add|drain|remove, keyspace create|drop, table distribute|reference|global, range split|merge|move, tenant pin, rebalance, scale, verify, cleanup, dissolve';
+const OP_HELP = 'nodes add|drain|remove, keyspace create|drop, table distribute|reference|global|auto, range split|merge|move, tenant pin, rebalance, scale, verify, cleanup, dissolve';
 
 /**
  * The operation `words` name (everything after `shards`), as the admin API's body.
@@ -185,11 +191,22 @@ export function parseOp(words: readonly string[], args: ParsedArgs, cloud = fals
 		case 'table distribute':
 			body = {
 				op: 'table.distribute',
-				table: need(rest[0], 'table distribute needs a table: cluster table distribute <schema.table> --column C --keyspace K'),
-				column: need(flag('column'), 'table distribute needs --column, the distribution key column'),
+				table: need(rest[0], 'table distribute needs a table: cluster table distribute <schema.table> --distribution-key C --keyspace K'),
+				// --column is the flag's old name, still taken.
+				column: need(flag('distribution-key') ?? flag('column'), 'table distribute needs --distribution-key, the column whose value decides which node holds each row'),
 				keyspace: need(flag('keyspace'), 'table distribute needs --keyspace')
 			};
 			break;
+		case 'table auto': {
+			const schemas = flag('schemas');
+			body = {
+				op: 'table.auto',
+				keyspace: need(flag('keyspace'), 'table auto needs --keyspace, the keyspace every table it distributes goes in'),
+				...(schemas !== undefined ? { schemas: schemas.split(',').map((s) => s.trim()).filter((s) => s !== '') } : {}),
+				...optionalInteger(args, 'min-bytes', 'min_bytes')
+			};
+			break;
+		}
 		case 'table reference':
 		case 'table global':
 			body = {
@@ -382,7 +399,7 @@ export async function shards(args: ParsedArgs, options: ShardsOptions = {}): Pro
 
 	switch (first) {
 		case 'enable': {
-			// The Cloud's own step: the router joins the project's pod, a restart of the database.
+			// The Cloud's own step: the router and the services get pods of their own; the database keeps running.
 			if (!cloud) {
 				throw new UsageError('cluster enable is for a SnoutData Cloud project: cluster enable --project <ref>. A standalone router is a cluster from the moment it runs');
 			}
@@ -397,7 +414,7 @@ export async function shards(args: ParsedArgs, options: ShardsOptions = {}): Pro
 			}
 			if (!flagBoolean(args, 'yes')) {
 				if (!options.confirm && !canAsk()) {
-					throw new UsageError('making it a cluster restarts the database once, and nothing was asked: pass --yes, or --plan to see what it does');
+					throw new UsageError('making it a cluster moves the project\'s services into pods of their own, and nothing was asked: pass --yes, or --plan to see what it does');
 				}
 				printPlan((await shards.enable(true)) as Plan, process.stderr);
 				const ask = options.confirm ?? confirm;
@@ -448,8 +465,8 @@ export async function shards(args: ParsedArgs, options: ShardsOptions = {}): Pro
 				throw new UsageError('cluster spread needs --project <ref>');
 			}
 			const request = {
-				table: second ?? required(flagString(args, 'table'), 'cluster spread needs the table: cluster spread <schema.table> --column C --key-type T'),
-				column: required(flagString(args, 'column'), 'cluster spread needs --column, the column to spread the rows by'),
+				table: second ?? required(flagString(args, 'table'), 'cluster spread needs the table: cluster spread <schema.table> --distribution-key C --key-type T'),
+				column: required(flagString(args, 'distribution-key') ?? flagString(args, 'column'), 'cluster spread needs --distribution-key, the column to spread the rows by'),
 				key_type: required(flagString(args, 'key-type'), "cluster spread needs --key-type, the column's type (bigint, uuid, text, ...)")
 			};
 			if (flagBoolean(args, 'plan')) {
@@ -569,12 +586,19 @@ export async function shards(args: ParsedArgs, options: ShardsOptions = {}): Pro
 		}
 		case 'settings':
 			return settingsCommand(args, client);
+		case 'autopilot':
+			return autopilotCommand(second, args, client, options);
 		case 'advise':
 		case 'advice': {
 			const sample = optionalInteger(args, 'sample-ms', 'sampleMs').sampleMs;
 			const advice = await client().advice(sample);
 			emit(advice, () => printAdvice(advice, process.stdout));
 			return 0;
+		}
+		case 'check': {
+			const check = await client().check();
+			emit(check, () => printCheck(check, process.stdout));
+			return check.summary.errors > 0 ? 1 : 0;
 		}
 		case 'jobs':
 			return jobsCommand(second, third, args, client(), options);
@@ -701,6 +725,92 @@ async function settingsCommand(args: ParsedArgs, client: () => ShardsClient): Pr
 	}
 	const changed = await client().settings(patch);
 	emit(changed, () => say(`Set ${Object.entries(changed.settings).map(([k, v]) => `${k}=${v}`).join(', ')}.`));
+	return 0;
+}
+
+/** The autopilot's mode in a sentence: what it does, so off reads as plainly as on. */
+export function autopilotModeSentence(mode: AutopilotMode, intervalMs: number): string {
+	const every = `every ${Math.round(intervalMs / 1000)} s`;
+	switch (mode) {
+		case 'advise':
+			return `Autopilot: advise. ${every[0]!.toUpperCase()}${every.slice(1)} it records what it would run, and runs nothing.`;
+		case 'auto':
+			return `Autopilot: auto. ${every[0]!.toUpperCase()}${every.slice(1)}, when no job is running, it runs the advisor's recommendation as a job of its own, never in a keyspace you placed by hand.`;
+		default:
+			return 'Autopilot: off. It runs nothing on its own. Turn it on with cluster autopilot advise, or auto.';
+	}
+}
+
+function opWords(request: OpBody | null | undefined): string {
+	return request?.op ? ` ${request.op}${request.keyspace ? ` in ${String(request.keyspace)}` : ''}` : '';
+}
+
+/** What `cluster autopilot` prints: the mode, then what it decided last. */
+export function autopilotLines(state: AutopilotState): string[] {
+	// In the Cloud the owner's choice is the control plane's, and the router itself only ever advises,
+	// so on auto the router's own reading would say advise and "it would run".
+	const cloud = state.cloud;
+	if (cloud?.mode === 'auto') {
+		const lines = [`${autopilotModeSentence('auto', state.interval_ms)} In SnoutData Cloud each goes through the same checks as a move of yours (the database's size, and room on every node).`];
+		if (cloud.taken_at) {
+			const op = opWords(cloud.request);
+			const what = cloud.job !== null ? `it ran${op} (job ${cloud.job})` : cloud.error ? `it did not run${op}. ${cloud.error}` : `it is starting${op}`;
+			lines.push(`Last taken ${cloud.taken_at.slice(0, 19).replace('T', ' ')}: ${what}`);
+		}
+		return lines;
+	}
+	if (cloud?.mode === 'off') {
+		return [autopilotModeSentence('off', state.interval_ms)];
+	}
+	const lines = [autopilotModeSentence(state.mode, state.interval_ms)];
+	const d = state.last?.decision;
+	if (state.last && d && d.kind !== 'off') {
+		const what: Record<string, string> = {
+			propose: 'it would run',
+			submit: 'it ran',
+			nothing: 'nothing to run',
+			busy: 'it waited for a job',
+			held: 'it is waiting for you'
+		};
+		const op = opWords(d.request);
+		const job = d.job !== undefined ? ` (job ${d.job})` : '';
+		lines.push(`Last decided ${state.last.at.slice(0, 19).replace('T', ' ')}: ${what[d.kind] ?? d.kind}${op}${job}${d.why ? `. ${d.why}` : ''}${d.error ? `. It could not: ${d.error}` : ''}`);
+	}
+	return lines;
+}
+
+async function autopilotCommand(mode: string | undefined, args: ParsedArgs, client: () => ShardsClient, options: ShardsOptions): Promise<number> {
+	const interval = optionalInteger(args, 'interval-ms', 'autopilot_interval_ms');
+	if (mode === undefined || mode === 'status') {
+		if (Object.keys(interval).length > 0) {
+			const changed = await client().setAutopilot(interval);
+			emit(changed, () => say(`Set autopilot_interval_ms=${interval.autopilot_interval_ms}.`));
+			return 0;
+		}
+		const state = await client().autopilot();
+		emit(state, () => {
+			for (const l of autopilotLines(state)) {
+				say(l);
+			}
+		});
+		return 0;
+	}
+	if (!(AUTOPILOT_MODES as readonly string[]).includes(mode)) {
+		throw new UsageError(`cluster autopilot [off|advise|auto] [--interval-ms N], not "${mode}"`);
+	}
+	const chosen = mode as AutopilotMode;
+	// Auto lets the router move data on its own: asked first, like anything else that moves data.
+	if (chosen === 'auto' && !flagBoolean(args, 'yes')) {
+		if (!options.confirm && !canAsk()) {
+			throw new UsageError('autopilot auto lets the router move data on its own, and nothing was asked: pass --yes to turn it on');
+		}
+		const ask = options.confirm ?? confirm;
+		if (!(await ask('Let the router move data on its own (autopilot auto)?'))) {
+			throw new CliFailure('failed', 'Not changed. The autopilot is as it was.');
+		}
+	}
+	const changed = await client().setAutopilot({ autopilot: chosen, ...interval });
+	emit(changed, () => say(autopilotModeSentence(chosen, interval.autopilot_interval_ms ?? 60_000)));
 	return 0;
 }
 
@@ -840,6 +950,20 @@ export function printPlan(plan: Plan, out: Out): void {
 		out,
 		`  total: ~${plan.estimated_rows.toLocaleString('en-US')} rows, ${describeBytes(plan.estimated_bytes)}, ~${plan.estimated_copy_seconds}s to copy, expected write pause ~${plan.expected_pause_ms}ms (ceiling ${plan.max_write_pause_ms}ms)`
 	);
+	if (plan.choices && plan.choices.length > 0) {
+		const word = { shard: 'shard by', reference: 'copy to every node', leave: 'leave on the home node' };
+		line(
+			out,
+			table([
+				['  TABLE', 'CHOICE', 'WHY'],
+				...plan.choices.map((c) => [
+					`  ${c.table}`,
+					c.choice === 'shard' ? `${word.shard} ${c.column}` : word[c.choice],
+					c.why
+				])
+			])
+		);
+	}
 	line(out, `  steps: ${plan.steps.map((s) => s.kind).join(', ') || 'none'}`);
 	for (const warning of plan.warnings) {
 		line(out, `  warning: ${warning}`);
@@ -876,6 +1000,27 @@ export function commandFor(request: OpBody): string | null {
 		default:
 			return null;
 	}
+}
+
+/** The design check, most severe first: each finding, its fix, and the SQL or command that does it. */
+export function printCheck(check: DesignCheck, out: Out): void {
+	const { errors, warnings, info, tables } = check.summary;
+	line(out, `${tables} table${tables === 1 ? '' : 's'} checked: ${errors} to fix, ${warnings} to look at, ${info} suggestion${info === 1 ? '' : 's'}.`);
+	const word = { error: 'fix', warn: 'look at', info: 'suggestion' } as const;
+	check.findings.forEach((f, i) => {
+		line(out);
+		line(out, `${bold(`${i + 1}. ${f.table}`)} (${word[f.severity]}, ${f.code})`);
+		line(out, `   ${f.message}`);
+		line(out, `   ${f.fix}`);
+		if (f.sql) {
+			for (const sql of f.sql.split('\n')) {
+				line(out, `   sql: ${sql}`);
+			}
+		}
+		if (f.operation) {
+			line(out, `   run: ${commandFor(f.operation) ?? JSON.stringify(f.operation)}`);
+		}
+	});
 }
 
 /** The advisor's answer, as somebody deciding what to do next wants to read it. */
@@ -1066,7 +1211,7 @@ export function printAlerts(alerts: readonly ClusterAlert[], out: Out, all: bool
 	}
 	for (const alert of open) {
 		line(out, `${bold(severityWord(alert))} ${alert.message}`);
-		line(out, dim(`  ${alert.id}, opened ${alert.openedAt.slice(0, 16).replace('T', ' ')}${alert.acknowledged ? ', seen' : ''}`));
+		line(out, dim(`  ${alert.id}, since ${utcMinute(alert.openedAt)} (${alertSpan(alert.openedAt, null)} so far)${alert.acknowledged ? ', seen' : ''}`));
 	}
 	if (resolved.length > 0) {
 		if (open.length > 0) {
@@ -1075,8 +1220,21 @@ export function printAlerts(alerts: readonly ClusterAlert[], out: Out, all: bool
 		line(out, 'Resolved in the last day:');
 		for (const alert of resolved) {
 			line(out, `  ${alert.message}${alert.resolution ? ` ${dim(alert.resolution)}` : ''}`);
+			line(out, dim(`    ${utcMinute(alert.openedAt)} to ${utcMinute(alert.resolvedAt)}, ${alertSpan(alert.openedAt, alert.resolvedAt)}`));
 		}
 	}
+}
+
+/** "2026-11-04 17:41 UTC": an alert's times are said in UTC, labelled, so nobody guesses the zone. */
+export function utcMinute(iso: string | null): string {
+	return iso ? `${iso.slice(0, 16).replace('T', ' ')} UTC` : 'unknown';
+}
+
+/** How long an alert lasted, or has lasted so far when it is still open. */
+export function alertSpan(openedAt: string, resolvedAt: string | null): string {
+	const end = resolvedAt ? Date.parse(resolvedAt) : Date.now();
+	const seconds = Math.max(0, Math.round((end - Date.parse(openedAt)) / 1000));
+	return seconds < 60 ? 'under a minute' : describeCompute(seconds);
 }
 
 /** Project slots left on the plan, 0 when unread: each node pod takes one. */
@@ -1101,7 +1259,7 @@ function printCloud(cloud: CloudShardsView, out: Out): void {
 	if (!cloud.sharded) {
 		line(out, `${bold(cloud.ref)} is not a cluster (${limit}).`);
 		if (spareSlots(cloud) > 0) {
-			line(out, `Make it a cluster: snoutdata cluster enable --project ${cloud.ref} (the database restarts once).`);
+			line(out, `Make it a cluster: snoutdata cluster enable --project ${cloud.ref} (the database keeps running).`);
 		}
 		return;
 	}
@@ -1145,8 +1303,8 @@ function printJobs(jobs: JobSummary[]): void {
 	line(
 		process.stdout,
 		table([
-			['ID', 'OPERATION', 'STATE', 'STEPS', 'CREATED', 'ERROR'],
-			...jobs.map((j) => [String(j.id), j.op, j.state, `${j.steps_done}/${j.steps}`, j.created_at.slice(0, 19).replace('T', ' '), j.error ?? ''])
+			['ID', 'OPERATION', 'STATE', 'STEPS', 'BY', 'CREATED', 'ERROR'],
+			...jobs.map((j) => [String(j.id), j.op, j.state, `${j.steps_done}/${j.steps}`, j.actor === 'lepis' ? 'autopilot' : 'you', j.created_at.slice(0, 19).replace('T', ' '), j.error ?? ''])
 		])
 	);
 }

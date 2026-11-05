@@ -181,7 +181,7 @@ test('a failure under --json puts a code on stdout, not an empty stream', { skip
 test('an unknown flag is refused rather than ignored', { skip: built ? false : 'run npm test, which builds first' }, () => {
 	// Eight flags used to parse and do nothing, `--yes` among them, which is exactly the
 	// one a script author reaches for and assumes has confirmed something.
-	for (const flag of ['--password', '--limit', '--nonsense']) {
+	for (const flag of ['--password', '--output', '--nonsense']) {
 		const result = run(['whoami', flag, 'x']);
 		assert.equal(result.code, EXIT.usage, `${flag} did not exit ${EXIT.usage}`);
 		assert.match(result.stderr, /unknown option/, `${flag} was accepted`);

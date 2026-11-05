@@ -11,7 +11,7 @@ import { CliFailure } from '../failure.js';
 import { setInteractive } from '../interactive.js';
 import { setQuiet } from '../output.js';
 import { CloudShardsClient, type Advice, type Job, type OpBody, type Plan, type ShardsClient } from '../shardsClient.js';
-import { commandFor, describeBytes, follow, parseOp, parseSet, podStep, printAdvice, printAlerts, replicaPhrase, shards, slotsPhrase, spareSlots } from './shards.js';
+import { autopilotLines, autopilotModeSentence, commandFor, describeBytes, follow, parseOp, parseSet, podStep, printAdvice, printAlerts, printPlan, replicaPhrase, shards, slotsPhrase, spareSlots } from './shards.js';
 
 setQuiet(true);
 // Nobody at a terminal, as in CI: the gate's default.
@@ -84,6 +84,13 @@ describe('parseOp: the words become the admin API\'s body', () => {
 		assert.throws(() => op('keyspace', 'create', 'k', '--key-type', 'bigint', '--seed', '18446744073709551616'), UsageError);
 		assert.throws(() => op('keyspace', 'create', 'k', '--key-type', 'bigint', '--seed', '-1'), UsageError);
 		assert.deepEqual(op('table', 'distribute', 'public.orders', '--column', 'tenant_id', '--keyspace', 'tenant').body, {
+			op: 'table.distribute',
+			table: 'public.orders',
+			column: 'tenant_id',
+			keyspace: 'tenant'
+		});
+		// --distribution-key is the flag's name; --column, its old one, is still taken.
+		assert.deepEqual(op('table', 'distribute', 'public.orders', '--distribution-key', 'tenant_id', '--keyspace', 'tenant').body, {
 			op: 'table.distribute',
 			table: 'public.orders',
 			column: 'tenant_id',
@@ -195,6 +202,14 @@ function fake(states: Job['state'][] = ['running', 'done'], error: string | null
 			calls.push('ops');
 			return { ops: [], settings: {} };
 		},
+		async autopilot() {
+			calls.push('autopilot');
+			return { mode: 'off', interval_ms: 60000, last: null };
+		},
+		async setAutopilot(patch) {
+			calls.push('setAutopilot');
+			return { settings: patch };
+		},
 		async plan(body) {
 			calls.push('plan');
 			sent.push(body);
@@ -231,6 +246,10 @@ function fake(states: Job['state'][] = ['running', 'done'], error: string | null
 		async advice(sampleMs) {
 			calls.push(`advice ${sampleMs ?? '-'}`);
 			return ADVICE;
+		},
+		async check() {
+			calls.push('check');
+			return { findings: [{ severity: 'error' as const, code: 'should_be_reference', table: 'public.status', related: [], message: 'm', fix: 'f', sql: null, operation: { op: 'table.reference', table: 'public.status' } }], summary: { errors: 1, warnings: 0, info: 0, tables: 3, foreign_keys: 2 } };
 		}
 	};
 	return { client, calls, sent };
@@ -570,4 +589,108 @@ describe('shards --project: a SnoutData Cloud project, through cloud-project-sha
 		assert.equal(slotsPhrase({ projectsUsed: 2, maxProjects: 5, tier: 'pro' }), '2 of 5 project slots used on the pro plan; each node uses one');
 		assert.equal(slotsPhrase({ projectsUsed: null, maxProjects: null, tier: null }), 'the plan could not be read');
 	});
+});
+
+describe('table auto: keys chosen for every table, and why', () => {
+	test('the words, the gate, and the Cloud action', () => {
+		assert.deepEqual(op('table', 'auto', '--keyspace', 'tenant'), { body: { op: 'table.auto', keyspace: 'tenant' }, destructive: true });
+		assert.deepEqual(op('table', 'auto', '--keyspace', 'tenant', '--schemas', 'public, app', '--min-bytes', '0').body, {
+			op: 'table.auto',
+			keyspace: 'tenant',
+			schemas: ['public', 'app'],
+			min_bytes: 0
+		});
+		assert.throws(() => op('table', 'auto'), UsageError);
+		assert.throws(() => op('table', 'auto', '--keyspace', 'tenant', '--min-bytes', 'big'), UsageError);
+	});
+
+	test('the plan says what it chose for every table', () => {
+		const plan: Plan = {
+			op: 'table.auto',
+			steps: [],
+			moves: [],
+			cutovers: 2,
+			estimated_rows: 0,
+			estimated_bytes: 0,
+			estimated_copy_seconds: 0,
+			expected_pause_ms: 0,
+			max_write_pause_ms: 2000,
+			warnings: [],
+			choices: [
+				{ table: 'public.accounts', choice: 'shard', column: 'id', why: 'the tenant: 2 tables reference its id' },
+				{ table: 'public.plans', choice: 'reference', column: null, why: 'small, and a distributed table references it' },
+				{ table: 'public.audit', choice: 'leave', column: null, why: 'id is filled by a sequence' }
+			]
+		};
+		let text = '';
+		printPlan(plan, { write: (t: string) => (text += t) });
+		assert.match(text, /public\.accounts\s+shard by id\s+the tenant: 2 tables reference its id/);
+		assert.match(text, /public\.plans\s+copy to every node/);
+		assert.match(text, /public\.audit\s+leave on the home node\s+id is filled by a sequence/);
+	});
+});
+
+describe('cluster autopilot: off unless set, said plainly', () => {
+	test('each mode is a sentence that says what it does, off included', () => {
+		assert.match(autopilotModeSentence('off', 60000), /^Autopilot: off\. It runs nothing on its own/);
+		assert.match(autopilotModeSentence('advise', 60000), /Every 60 s it records what it would run, and runs nothing/);
+		assert.match(autopilotModeSentence('auto', 5000), /Every 5 s, when no job is running, it runs/);
+		for (const m of ['off', 'advise', 'auto'] as const) {
+			assert.ok(!autopilotModeSentence(m, 60000).includes('\u2014'), 'no em dash');
+		}
+	});
+
+	test('what it decided last follows the mode', () => {
+		assert.deepEqual(autopilotLines({ mode: 'off', interval_ms: 60000, last: null }), [autopilotModeSentence('off', 60000)]);
+		const lines = autopilotLines({
+			mode: 'advise',
+			interval_ms: 60000,
+			last: { mode: 'advise', at: '2026-10-27T16:00:00Z', decision: { kind: 'propose', request: { op: 'range.move', keyspace: 'acct' }, why: 'node 1 holds 80%' } }
+		});
+		assert.equal(lines[1], 'Last decided 2026-10-27 16:00:00: it would run range.move in acct. node 1 holds 80%');
+	});
+
+	test('in the Cloud, the owner\'s choice and what the Cloud ran win over the router, which only advises', () => {
+		const router = {
+			mode: 'advise' as const,
+			interval_ms: 60000,
+			last: { mode: 'advise', at: '2026-10-28T05:00:00Z', decision: { kind: 'propose', request: { op: 'range.move', keyspace: 'acct' }, why: 'node 1 holds 80%' } }
+		};
+		const taken = { mode: 'auto' as const, taken_at: '2026-10-28T05:00:30Z', request: { op: 'range.move', keyspace: 'acct' }, job: 12, error: null };
+		const ran = autopilotLines({ ...router, cloud: taken });
+		assert.match(ran[0]!, /^Autopilot: auto\. .* In SnoutData Cloud each goes through the same checks as a move of yours/);
+		assert.equal(ran[1], 'Last taken 2026-10-28 05:00:30: it ran range.move in acct (job 12)');
+		assert.equal(ran.length, 2, 'the router\'s "it would run" is not shown beside what the Cloud ran');
+		const refused = autopilotLines({ ...router, cloud: { ...taken, job: null, error: 'Node 2 has no room for it.' } });
+		assert.equal(refused[1], 'Last taken 2026-10-28 05:00:30: it did not run range.move in acct. Node 2 has no room for it.');
+		assert.deepEqual(autopilotLines({ ...router, cloud: { ...taken, taken_at: null, request: null, job: null } }), [ran[0]]);
+		assert.equal(autopilotLines({ ...router, cloud: { ...taken, job: null } })[1], 'Last taken 2026-10-28 05:00:30: it is starting range.move in acct');
+		// Advise and off read as before; off from the Cloud wins over a router still reporting advise.
+		assert.deepEqual(autopilotLines({ ...router, cloud: { ...taken, mode: 'advise' } }), autopilotLines(router));
+		assert.deepEqual(autopilotLines({ ...router, cloud: { ...taken, mode: 'off' } }), [autopilotModeSentence('off', 60000)]);
+		for (const line of [...ran, ...refused]) {
+			assert.ok(!line.includes('\u2014'), 'no em dash');
+		}
+	});
+
+	test('it reads, sets, and asks before auto', async () => {
+		const { client, calls } = fake();
+		assert.equal(await run(['autopilot'], { client }), 0);
+		assert.deepEqual(calls, ['autopilot']);
+		assert.equal(await run(['autopilot', 'advise', '--interval-ms', '30000'], { client }), 0);
+		assert.equal(calls.at(-1), 'setAutopilot');
+		// Nobody to ask and no --yes: refused before any request.
+		const before = calls.length;
+		await assert.rejects(run(['autopilot', 'auto'], { client }), UsageError);
+		assert.equal(calls.length, before);
+		assert.equal(await run(['autopilot', 'auto', '--yes'], { client }), 0);
+		assert.equal(calls.at(-1), 'setAutopilot');
+		await assert.rejects(run(['autopilot', 'on'], { client }), UsageError);
+	});
+});
+
+test('cluster check prints the findings and exits 1 when one must be fixed', async () => {
+	const { client, calls } = fake();
+	assert.equal(await run(['check'], { client }), 1);
+	assert.ok(calls.includes('check'));
 });

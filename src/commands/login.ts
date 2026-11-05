@@ -49,13 +49,14 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import { createServer } from 'node:http';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createInterface } from 'node:readline/promises';
 import { spawn } from 'node:child_process';
 import { ACCOUNTS_URL, APP_KEY } from '../api.js';
-import { browserUrl, doorFetch, identityRoute } from '../layout.js';
+import { browserUrl, dataRoute, doorFetch, identityRoute } from '../layout.js';
 import { UsageError } from '../args.js';
-import { writeAuth } from '../config.js';
+import { currentProfile, DEFAULT_PROFILE, writeAuth } from '../config.js';
+import { chooserPage, codePage, donePage, failedPage } from './signInPages.js';
 import { CliFailure, codeForStatus } from '../failure.js';
 import { canAsk, explainNoHuman, noHumanReason } from '../interactive.js';
 import { bold, say, warn } from '../output.js';
@@ -74,45 +75,20 @@ function base64url(input: Buffer): string {
 /**
  * The page the browser is left on when it comes back.
  *
- * This is the last thing somebody sees of a sign-in, and it was a line of unstyled text on
- * a white page while the desktop's equivalent was a designed one. Same shape as the
- * desktop's (`googleNativeAuth.ts`), same colours, taken from the app's Gold theme so the
- * two do not drift into different products.
- *
- * Everything is inline and self-contained on purpose: no fetch can succeed from here. The
- * loopback server is closed by the time this renders, so a stylesheet, a font or a logo
- * would each be a broken request. It is also why the mark below is drawn rather than
- * loaded.
+ * This is the last thing somebody sees of a sign-in. It wears the dashboard's sign-in card
+ * (`signInPages.ts`, 2026-11-04), as the chooser before it does, so a terminal sign-in looks like
+ * the product's: who it signed in as, and the command to type next. Everything is inline; only
+ * the logo comes from snoutdata.com, in a fixed box, because the loopback server is closed by the
+ * time this renders.
  *
  * Two deliberate differences from the desktop's version. There is no `snoutdata://` deep
  * link, because the desktop uses that to pull its own window forward and a terminal has
  * nothing to open. And there is a failure state, because the CLI can land here having been
  * refused, where the desktop only ever renders this after succeeding.
  */
-export function page(kind: 'ok' | 'failed', detail?: string): string {
-	const accent = kind === 'ok' ? '#e0b256' : '#e0765a';
-	const heading = kind === 'ok' ? 'Signed in' : 'Sign-in failed';
-	const body =
-		kind === 'ok'
-			? 'You can close this tab and go back to your terminal.'
-			: escapeHtml(detail ?? 'Something went wrong.');
-	// A failed sign-in leaves the terminal waiting for nothing, so the page says what to do
-	// about it rather than only what happened.
-	const hint =
-		kind === 'ok' ? '' : '<p style="color:#8f887e;margin:14px 0 0;font-size:14px">Run <code style="background:#1b1917;border:1px solid #262320;border-radius:6px;padding:2px 6px;font-size:13px">snoutdata login</code> to try again.</p>';
-	return `<!doctype html><html><head><meta charset="utf-8"><title>SnoutData</title>
-<meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;background:#050403;color:#e9e4dc;display:grid;place-items:center;min-height:100vh;margin:0">
-<div style="text-align:center;max-width:460px;padding:40px 24px">
-<div style="width:44px;height:44px;margin:0 auto 30px;border-radius:12px;background:#191714;border:1px solid #262320;display:grid;place-items:center">
-<div style="width:14px;height:14px;border-radius:50%;background:${accent}"></div>
-</div>
-<div style="font-size:12px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:#8f887e;margin-bottom:22px">SnoutData</div>
-<h1 style="margin:0 0 12px;font-size:30px;font-weight:600;letter-spacing:-.01em">${heading}</h1>
-<p style="color:#8f887e;margin:0;font-size:15px;line-height:1.5">${body}</p>
-${hint}
-</div>
-</body></html>`;
+export function page(kind: 'ok' | 'failed', detail?: string, email?: string): string {
+	const profile = currentProfile() === DEFAULT_PROFILE ? undefined : currentProfile();
+	return kind === 'ok' ? donePage({ email, profile }) : failedPage(detail);
 }
 
 /** RFC 7636: a verifier we keep, and the challenge we send. */
@@ -435,6 +411,11 @@ async function loginWithGoogle(options: {
 	});
 
 	const idToken = await exchangeCodeForIdToken(code, verifier, redirectUri);
+	return sessionFromGoogle(idToken, rawNonce);
+}
+
+/** The auth server's `grant_type=id_token`: Google's ID token, with the RAW nonce, into a session. */
+async function sessionFromGoogle(idToken: string, rawNonce: string): Promise<LoginResult> {
 	const response = await doorFetch(ACCOUNTS_URL, identityRoute('/session?via=id_token', '/token?grant_type=id_token'), {
 		method: 'POST',
 		key: APP_KEY,
@@ -675,6 +656,303 @@ async function loginWithSso(options: {
 	return exchangePkceCode(code, verifier);
 }
 
+/** This machine's IANA timezone, or null when Node's Intl does not say. */
+export function systemTimezone(): string | null {
+	try {
+		return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+	} catch {
+		return null;
+	}
+}
+
+/** How long a sign-in waits for the timezone to be recorded before it says it is done anyway. */
+const TIMEZONE_WAIT_MS = 3000;
+
+/**
+ * Tell the account this machine's timezone, right after an interactive sign-in. A hosted project's
+ * default maintenance window (when a running database may be moved to another server) is 2 to 6 AM
+ * in its owner's timezone, and `set_my_timezone(tz, 'signin')` stores it unless the owner set one by
+ * hand on the dashboard's Account page. The website, the
+ * dashboard and Studio do the same on their sign-ins.
+ *
+ * Best effort: never throws and never takes longer than TIMEZONE_WAIT_MS. Answers null when it was
+ * recorded (or there was nothing to record), else why not, which `login` writes to stderr only under
+ * SNOUTDATA_DEBUG: a sign-in that worked should not end on a line about something else.
+ */
+export async function reportTimezone(
+	accessToken: string,
+	timezone: string | null = systemTimezone(),
+	fetcher: typeof fetch = fetch
+): Promise<string | null> {
+	if (!timezone || !accessToken) {
+		return null;
+	}
+	const sent = doorFetch(
+		ACCOUNTS_URL,
+		dataRoute('/rpc/set_my_timezone'),
+		{
+			method: 'POST',
+			key: APP_KEY,
+			headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+			body: JSON.stringify({ want_timezone: timezone, want_source: 'signin' })
+		},
+		fetcher
+	).then(
+		async (response) => (response.ok ? null : `HTTP ${response.status}: ${(await response.text().catch(() => '')).slice(0, 200)}`),
+		(e: unknown) => (e instanceof Error ? e.message : String(e))
+	);
+	let timer: NodeJS.Timeout | undefined;
+	const late = new Promise<string>((resolve) => {
+		timer = setTimeout(() => resolve('timed out'), TIMEZONE_WAIT_MS);
+		timer.unref();
+	});
+	try {
+		return await Promise.race([sent, late]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/** Up to 4 KB of a form post, as its fields. A sign-in form never needs more. */
+async function formFields(request: IncomingMessage): Promise<URLSearchParams> {
+	let body = '';
+	for await (const chunk of request) {
+		body += String(chunk);
+		if (body.length > 4096) {
+			break;
+		}
+	}
+	return new URLSearchParams(body);
+}
+
+/** The auth server's `/code`: a six-digit code to that address, the account made if there is none. */
+async function sendSignInCode(email: string): Promise<string | null> {
+	const response = await doorFetch(ACCOUNTS_URL, identityRoute('/code', '/otp'), {
+		method: 'POST',
+		key: APP_KEY,
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ email, create_user: true })
+	});
+	if (response.ok) {
+		return null;
+	}
+	// The auth server allows one send a minute and says so; its sentence tells the person to wait.
+	return messageFromBody(await response.text()) || 'Could not send a code just now. Try again in a moment.';
+}
+
+/**
+ * The auth server's `/confirm` for a code, as the dashboard's SsoSignIn does it: `email` first (an
+ * address it knew), then `signup` (one the code itself created), since whoever types it cannot know.
+ */
+async function confirmSignInCode(email: string, token: string): Promise<LoginResult | string> {
+	let last = '';
+	for (const type of ['email', 'signup']) {
+		const response = await doorFetch(ACCOUNTS_URL, identityRoute('/confirm', '/verify'), {
+			method: 'POST',
+			key: APP_KEY,
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ email, token, type })
+		});
+		const text = await response.text();
+		if (response.ok) {
+			return storeSession(JSON.parse(text));
+		}
+		last = text;
+		if (response.status !== 403 && !/otp_expired|expired|invalid/i.test(text)) {
+			break;
+		}
+	}
+	const message = messageFromBody(last);
+	return /expired|invalid/i.test(message) || !message
+		? 'That code did not work. It may be from an older email, or already used. Send another.'
+		: message;
+}
+
+type ChooserFlow =
+	| { readonly kind: 'google'; readonly verifier: string; readonly rawNonce: string; readonly state: string }
+	| { readonly kind: 'pkce'; readonly verifier: string };
+
+/**
+ * Plain `snoutdata login`: the sign-in page, with every way in.
+ *
+ * It used to go straight to Google, which left anyone who signs in with GitHub, their company's
+ * identity provider or an emailed code to know a flag. Now the browser opens a page this process
+ * serves on 127.0.0.1, in the dashboard's design (`signInPages.ts`), and each button runs the same
+ * flow its flag runs: Google's loopback PKCE, the auth server's redirect for GitHub and SSO, and the
+ * six-digit code for an address no identity provider claims, exactly as the dashboard's work-email
+ * field does. One port serves the page and every redirect back, so whichever way is taken, the code
+ * lands here and is exchanged with a verifier only this process holds.
+ *
+ * The page's links and forms carry a per-run token, so another page on this machine cannot drive
+ * the sign-in, and the done page is sent only once the session is stored, so it can say whose it is.
+ */
+async function loginWithChooser(options: { timeoutMs?: number; noBrowser?: boolean; email?: string }): Promise<LoginResult> {
+	const token = base64url(randomBytes(18));
+	const profile = currentProfile() === DEFAULT_PROFILE ? undefined : currentProfile();
+	const google = Boolean(googleClientId());
+	let flow: ChooserFlow | null = null;
+	let codeTo: string | null = null;
+
+	return new Promise<LoginResult>((resolve, reject) => {
+		let base = '';
+		let settled = false;
+		const html = (response: ServerResponse, body: string, status = 200): void => {
+			response.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+			response.end(body);
+		};
+		const finish = (response: ServerResponse, outcome: LoginResult | Error): void => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			html(response, outcome instanceof Error ? failedPage(outcome.message) : page('ok', undefined, outcome.email));
+			server.close();
+			if (outcome instanceof Error) {
+				reject(outcome);
+			} else {
+				resolve(outcome);
+			}
+		};
+		const chooser = (response: ServerResponse, extra: { email?: string; error?: string } = {}): void =>
+			html(response, chooserPage({ token, google, profile, email: extra.email ?? options.email, error: extra.error }));
+
+		const handle = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+			const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+			const ours = url.searchParams.get('t') === token;
+
+			// The way back from Google (the root, as its desktop client is registered) and from the
+			// auth server (`/callback`). Bound by the flow's own state and verifier, not by the token.
+			if ((url.pathname === '/' || url.pathname === '/callback') && (url.searchParams.has('code') || url.searchParams.has('error'))) {
+				const expected = flow?.kind === 'google' && url.pathname === '/' ? flow.state : undefined;
+				const outcome = readRedirect(request.url ?? '/', expected);
+				if (outcome.kind === 'ignore') {
+					response.writeHead(404).end();
+					return;
+				}
+				if (outcome.kind === 'error' || !flow) {
+					finish(response, new Error(outcome.kind === 'error' ? outcome.message : 'the browser came back to a sign-in that was not started'));
+					return;
+				}
+				try {
+					if (flow.kind === 'google') {
+						const idToken = await exchangeCodeForIdToken(outcome.code, flow.verifier, base);
+						finish(response, await sessionFromGoogle(idToken, flow.rawNonce));
+					} else {
+						finish(response, await exchangePkceCode(outcome.code, flow.verifier));
+					}
+				} catch (error) {
+					finish(response, error instanceof Error ? error : new Error(String(error)));
+				}
+				return;
+			}
+
+			if (request.method === 'GET' && url.pathname === '/' && ours) {
+				chooser(response);
+				return;
+			}
+			if (request.method === 'GET' && url.pathname === '/google' && ours && google) {
+				const { verifier, challenge } = pkcePair();
+				const { raw, hashed } = nonceForGoogle();
+				const state = base64url(randomBytes(16));
+				flow = { kind: 'google', verifier, rawNonce: raw, state };
+				response.writeHead(302, { Location: googleAuthorizeUrl({ redirectUri: base, challenge, hashedNonce: hashed, state, loginHint: options.email }) }).end();
+				return;
+			}
+			if (request.method === 'GET' && url.pathname === '/github' && ours) {
+				const { verifier, challenge } = pkcePair();
+				flow = { kind: 'pkce', verifier };
+				response.writeHead(302, { Location: await providerAuthorizeUrl('github', `${base}/callback`, challenge) }).end();
+				return;
+			}
+			if (request.method === 'POST') {
+				const fields = await formFields(request);
+				if (fields.get('t') !== token) {
+					response.writeHead(403).end();
+					return;
+				}
+				if (url.pathname === '/email') {
+					const email = (fields.get('email') ?? '').trim().toLowerCase();
+					const domain = ssoDomain(email);
+					if (!domain || !email.includes('@')) {
+						chooser(response, { email, error: 'Enter your work email, for example you@company.com.' });
+						return;
+					}
+					const { verifier, challenge } = pkcePair();
+					try {
+						const sso = await ssoAuthorizeUrl({ domain, redirectTo: `${base}/callback`, challenge });
+						flow = { kind: 'pkce', verifier };
+						response.writeHead(302, { Location: sso }).end();
+						return;
+					} catch (error) {
+						// No identity provider claims the domain: the ordinary case, and not a refusal. A code
+						// goes to the address instead, as the dashboard does (SsoSignIn.tsx).
+						if (!(error instanceof CliFailure && error.code === 'not-found')) {
+							chooser(response, { email, error: error instanceof Error ? error.message : String(error) });
+							return;
+						}
+					}
+					const refused = await sendSignInCode(email);
+					if (refused) {
+						chooser(response, { email, error: refused });
+						return;
+					}
+					codeTo = email;
+					html(response, codePage({ token, email, profile }));
+					return;
+				}
+				if (url.pathname === '/code' && codeTo) {
+					const typed = (fields.get('code') ?? '').replace(/\s+/g, '');
+					const outcome = await confirmSignInCode(codeTo, typed);
+					if (typeof outcome === 'string') {
+						html(response, codePage({ token, email: codeTo, profile, error: outcome }));
+						return;
+					}
+					finish(response, outcome);
+					return;
+				}
+				if (url.pathname === '/resend' && codeTo) {
+					const refused = await sendSignInCode(codeTo);
+					html(response, codePage({ token, email: codeTo, profile, ...(refused ? { error: refused } : { notice: 'Another code is on its way.' }) }));
+					return;
+				}
+			}
+			// The favicon, a stale tab, a page from somewhere else: nothing of this sign-in's.
+			response.writeHead(404).end();
+		};
+
+		const server = createServer((request, response) => {
+			handle(request, response).catch((error: unknown) => {
+				if (!response.headersSent) {
+					html(response, failedPage(error instanceof Error ? error.message : String(error)), 500);
+				}
+			});
+		});
+		server.listen(0, '127.0.0.1', () => {
+			const address = server.address();
+			const port = typeof address === 'object' && address ? address.port : 0;
+			base = `http://127.0.0.1:${port}`;
+			const start = `${base}/?t=${token}`;
+			// On stdout, as every flow's URL is: it is the answer a person acts on (see codeFromBrowser).
+			process.stdout.write(`${start}\n`);
+			if (options.noBrowser) {
+				say('Open that in a browser on this machine and sign in.');
+			} else {
+				say('Opening the sign-in page in your browser. If nothing opens, paste that into one.');
+				open(start);
+			}
+		});
+		server.on('error', reject);
+		const timer = setTimeout(() => {
+			if (!settled) {
+				settled = true;
+				server.close();
+				reject(new Error('timed out waiting for the browser'));
+			}
+		}, options.timeoutMs ?? 300_000);
+		timer.unref();
+	});
+}
+
 export async function login(
 	options: {
 		provider?: string;
@@ -687,7 +965,12 @@ export async function login(
 		email?: string;
 	} = {}
 ): Promise<LoginResult> {
-	return expecting(options.email, await signIn(options));
+	const result = expecting(options.email, await signIn(options));
+	const notRecorded = await reportTimezone(result.accessToken);
+	if (notRecorded && process.env.SNOUTDATA_DEBUG) {
+		warn(`could not record the timezone: ${notRecorded}`);
+	}
+	return result;
 }
 
 /**
@@ -723,9 +1006,14 @@ async function signIn(options: {
 		// A work email is what SSO is looked up by anyway, so `--email` answers `--domain`.
 		return loginWithSso({ ...options, domain: options.domain ?? options.email });
 	}
-	// Google is the default and the only provider with a native path. Anything else (GitHub
-	// today) has no ID token to offer, so it keeps the auth server's redirect flow below.
-	const provider = options.provider ?? 'google';
+	// No provider named: the sign-in page, with every way in (`loginWithChooser`). A provider
+	// named is the shortcut straight to it, as before.
+	if (!options.provider) {
+		return loginWithChooser(options);
+	}
+	// Google is the only provider with a native path. Anything else (GitHub today) has no ID
+	// token to offer, so it keeps the auth server's redirect flow below.
+	const provider = options.provider;
 	if (provider === 'google') {
 		return loginWithGoogle(options);
 	}
@@ -735,31 +1023,32 @@ async function signIn(options: {
 		callbackPath: '/callback',
 		timeoutMs: options.timeoutMs,
 		noBrowser: options.noBrowser,
-		authorizeUrl: async (redirect) => {
-			const authorize = new URL(await browserUrl(ACCOUNTS_URL, identityRoute('/provider/start', '/authorize'), APP_KEY));
-			authorize.searchParams.set('provider', provider);
-			authorize.searchParams.set('redirect_to', redirect);
-			authorize.searchParams.set('code_challenge', challenge);
-			authorize.searchParams.set('code_challenge_method', 's256');
-			// ALWAYS ask which account.
-			//
-			// Without this, Google reuses whatever account the browser is already signed
-			// into and never says so: you type `snoutdata login`, a page flashes, and you
-			// are signed in as somebody else. On a shared machine, or for anybody with a
-			// work account and a personal one, that is silently the wrong identity, and
-			// the CLI is the surface where it is hardest to notice because there is no
-			// avatar in the corner to check afterwards.
-			//
-			// The website has always done this (`prompt: 'select_account'`); the CLI did
-			// not, which is the whole difference in behaviour between them.
-			authorize.searchParams.set('prompt', 'select_account');
-			return authorize.toString();
-		}
+		authorizeUrl: (redirect) => providerAuthorizeUrl(provider, redirect, challenge)
 	});
 
 	return exchangePkceCode(code, verifier);
 }
 
-function escapeHtml(text: string): string {
-	return text.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+/** The auth server's redirect flow for a named provider (GitHub), with PKCE and the account chooser. */
+async function providerAuthorizeUrl(provider: string, redirect: string, challenge: string): Promise<string> {
+	const authorize = new URL(await browserUrl(ACCOUNTS_URL, identityRoute('/provider/start', '/authorize'), APP_KEY));
+	authorize.searchParams.set('provider', provider);
+	authorize.searchParams.set('redirect_to', redirect);
+	authorize.searchParams.set('code_challenge', challenge);
+	authorize.searchParams.set('code_challenge_method', 's256');
+	// ALWAYS ask which account.
+	//
+	// Without this, Google reuses whatever account the browser is already signed
+	// into and never says so: you type `snoutdata login`, a page flashes, and you
+	// are signed in as somebody else. On a shared machine, or for anybody with a
+	// work account and a personal one, that is silently the wrong identity, and
+	// the CLI is the surface where it is hardest to notice because there is no
+	// avatar in the corner to check afterwards.
+	//
+	// The website has always done this (`prompt: 'select_account'`); the CLI did
+	// not, which is the whole difference in behaviour between them.
+	authorize.searchParams.set('prompt', 'select_account');
+	return authorize.toString();
 }
+
+

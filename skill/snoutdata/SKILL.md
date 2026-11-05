@@ -42,6 +42,11 @@ and gives it to you. With neither, commands exit 3; say so and ask for a token r
 
 Check first: `npx snoutdata whoami --json`.
 
+A person may be signed in to several accounts, one profile each. `npx snoutdata whoami --all --json`
+lists them; pass `--profile NAME` (or set `SNOUTDATA_PROFILE`) to act as one. A folder linked with a
+profile uses it on its own, so in a linked folder pass nothing. Never guess a profile: ask which
+account the user means when more than one is listed and the folder names none.
+
 ## The project
 
 A command finds its project from `--ref`, then `SNOUTDATA_PROJECT`, then `.snoutdata/project.json`
@@ -58,7 +63,12 @@ in this folder or a parent. `init` writes that file.
 | Pause / resume / delete | `npx snoutdata projects pause\|resume\|delete --ref REF --json` |
 | Connection string | `npx snoutdata db url --json` |
 | Run migrations (a folder of `.sql`, once each) | `npx snoutdata db push --dir migrations --dry-run --json`, then without `--dry-run` |
+| Run SQL, no psql needed (several statements: one transaction) | `npx snoutdata db query "select count(*) from people" --json` |
+| Run a `.sql` file in one transaction (DDL, checks), no psql needed | `npx snoutdata db run schema.sql --json` |
+| The statements that took the most time | `npx snoutdata db slow --limit 10 --json` |
 | Storage and compute against the plan limit (read before a big migration) | `npx snoutdata usage --json` |
+| Which tables use the space (partitions under their parent) | `npx snoutdata usage --tables --json` |
+| How hard each server works: CPU, memory, disk, connections, transactions, statement time, replica lag | `npx snoutdata metrics --window day --json` |
 | Back up (pg_dump) and download | `npx snoutdata db export --out backup.dump --json` |
 | How far back a point-in-time restore can go | `npx snoutdata db restore --window --json` |
 | Rewind to a moment, into a NEW project beside it | `npx snoutdata db restore --at 2026-09-20T14:30:00Z --json` |
@@ -76,13 +86,14 @@ in this folder or a parent. `init` writes that file.
 | List / delete functions | `npx snoutdata functions list\|delete NAME --json` |
 | Function secrets (names only are ever readable) | `npx snoutdata secrets list\|unset NAME --json` |
 | Your own domain for the project API (paid plans) | `npx snoutdata domains add api.example.com --json`, publish the printed records, then `domains verify api.example.com` |
-| Run a Docker image of yours as long as the project runs (Plus and Pro; image must include linux/arm64) | `npx snoutdata containers deploy NAME IMAGE --json` |
+| Run a Docker image of yours as long as the project runs (every paid plan: Plus, Pro and Business; image must include linux/arm64) | `npx snoutdata containers deploy NAME IMAGE --json` |
 | Containers: status and URL, logs, restart, delete | `npx snoutdata containers list\|logs NAME\|restart NAME\|delete NAME --json` |
 | Where containers may send | `npx snoutdata containers egress --json`, `containers egress set HOST,HOST` |
-| Make a project a cluster (one restart; each node uses a plan project slot) | `npx snoutdata cluster enable --project REF --plan --json`, then without `--plan` and with `--yes` |
+| Make a project a cluster (the database keeps running; each node uses a plan project slot) | `npx snoutdata cluster enable --project REF --plan --json`, then without `--plan` and with `--yes` |
 | A cluster's nodes, keyspaces, ranges, tables and jobs | `npx snoutdata cluster status --project REF --json` |
 | Add a node (joins and takes its share by itself) | `npx snoutdata cluster nodes add --project REF --json` |
-| Spread a table over the nodes by a column | `npx snoutdata cluster spread public.orders --column account_id --key-type bigint --project REF --plan --json` |
+| Spread a table over the nodes by a column | `npx snoutdata cluster spread public.orders --distribution-key account_id --key-type bigint --project REF --plan --json` |
+| Check the schema's keys, foreign keys and indexes before spreading (runs nothing) | `npx snoutdata cluster check --project REF --json` |
 | What happened to a cluster (node lost, failover, home down) | `npx snoutdata cluster alerts --project REF --json` |
 | TypeScript types for the schema | `npx snoutdata gen types typescript --out src/database.types.ts` |
 | The same Postgres locally, migrated and seeded | `npx snoutdata start` |

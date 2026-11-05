@@ -67,6 +67,20 @@ export interface ProviderInput {
 	auth_header?: string
 }
 
+/** One model as its provider lists it (`upstreamModels`), for a picker. */
+export interface UpstreamModel {
+	/** The provider's own id: what a model's `upstream` is set to. */
+	id: string
+	/** Its display name, when the provider gives one that differs from the id. */
+	name?: string
+	owned_by?: string
+	/** Seconds since the epoch, when the provider says. */
+	created?: number
+	/** The provider's word, or a guess from the id; absent when Psyche cannot tell. */
+	kind?: 'chat' | 'embedding' | 'completion'
+	context_window?: number
+}
+
 /** Dollars per million tokens, as providers publish them. */
 export interface Price {
 	input: number
@@ -417,6 +431,17 @@ export class PsycheAdmin {
 	deleteProvider(name: string): Promise<void> {
 		return this.none('DELETE', `admin/providers/${segment(name)}`)
 	}
+	/**
+	 * A provider's own list of models, asked of the provider with its credential. With a name, a
+	 * saved provider; with `{provider, credential}`, one not saved yet, kept nowhere. Rejects with
+	 * the provider's sentence when it cannot list (no list, a refused key, no answer in 10 s).
+	 */
+	upstreamModels(from: string | { provider: ProviderInput; credential: CredentialInput | null }): Promise<UpstreamModel[]> {
+		if (typeof from === 'string') {
+			return this.list(`admin/providers/${segment(from)}/upstream-models`)
+		}
+		return this.call<{ data?: UpstreamModel[] } | null>('POST', 'admin/upstream-models', from).then((answer) => answer?.data ?? [])
+	}
 
 	models(): Promise<Model[]> {
 		return this.list('admin/models')
@@ -510,6 +535,25 @@ export class PsycheAdmin {
 	private async none(method: Parameters<Transport>[0], path: string): Promise<void> {
 		await this.send(method, path)
 	}
+}
+
+/**
+ * The models a picker shows for what has been typed: every word of `query` in the id or the name,
+ * in the provider's order (chat first, newest first), at most `limit`.
+ */
+export function matchUpstream(models: UpstreamModel[], query: string, limit = 50): UpstreamModel[] {
+	const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+	const out: UpstreamModel[] = []
+	for (const model of models) {
+		const text = `${model.id} ${model.name ?? ''}`.toLowerCase()
+		if (words.every((w) => text.includes(w))) {
+			out.push(model)
+			if (out.length >= limit) {
+				break
+			}
+		}
+	}
+	return out
 }
 
 /** One path segment, encoded. */

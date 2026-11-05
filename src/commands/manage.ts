@@ -52,7 +52,7 @@ export async function getProducts(ref: string): Promise<Products> {
 	return { ref, auth, storage, dataApi, push, realtime: REALTIME };
 }
 
-const REALTIME = { enabled: true, broadcast: true, presence: true, tableChanges: 'Plus and Pro plans' } as const;
+const REALTIME = { enabled: true, broadcast: true, presence: true, tableChanges: 'every paid plan (Plus, Pro and Business)' } as const;
 
 export function parseProduct(word: string | undefined): Product {
 	const product = (word ?? '').toLowerCase().replace('_', '-').replace(/^dataapi$/, 'data-api');
@@ -99,7 +99,7 @@ export async function productsCommand(ref: string): Promise<void> {
 			line('storage', storage, 'pending' in storage && storage.pending ? 'waiting for the host' : ''),
 			line('data-api', dataApi, 'allowedOnPlan' in dataApi && !dataApi.allowedOnPlan ? 'not on this plan' : ''),
 			line('push', answer.push, 'scheduling' in answer.push && answer.push.enabled && !answer.push.scheduling ? 'scheduled sends on paid plans' : ''),
-			line('realtime', answer.realtime, 'always on: signals, roster; table changes on Plus and Pro'),
+			line('realtime', answer.realtime, 'always on: signals, roster; table changes on Plus, Pro and Business'),
 		])}\n`);
 		// The hint names a product that is actually OFF, or nothing: it used to say "enable
 		// storage" on a project where all four were already on.
@@ -273,16 +273,81 @@ export async function showCommand(ref: string): Promise<void> {
 		process.stdout.write(`${table([
 			['name', p.name],
 			['ref', p.ref],
-			['state', p.state],
+			['state', p.serverSilent ? `${p.state} (its server is not answering)` : p.state],
 			['region', p.region],
 			// Optional: a control plane older than 2026-10-05 does not send it, and a row that
 			// said "unknown" would be a guess dressed as an answer.
 			...(typeof p.postgresVersion === 'number' ? [['postgres', String(p.postgresVersion)]] : []),
 			['auth / storage / data-api / push', `${on(p.products.auth)} / ${on(p.products.storage)} / ${on(p.products.dataApi)} / ${on(p.products.push)}`],
-			['realtime', 'on (signals and the roster; table changes on Plus and Pro)'],
+			['realtime', 'on (signals and the roster on every plan; table changes on Plus, Pro and Business)'],
 			['functions', list(p.functions)],
 			['secrets', list(p.secretNames)],
 			['domains', list(p.domains)],
+		])}\n`);
+	});
+}
+
+// --- alert destinations (360) ------------------------------------------------------------------
+
+export interface AlertHook {
+	id: string;
+	kind: 'webhook' | 'slack';
+	url: string;
+	createdAt: string;
+	lastSentAt: string | null;
+	lastStatus: number | null;
+	lastError: string | null;
+}
+
+interface AlertHooksAnswer {
+	hooks: AlertHook[];
+	added?: string;
+	secret?: string;
+	sent?: { status: number | null; error: string | null };
+}
+
+/**
+ * `snoutdata alerts hooks [list] | add URL [--slack] | remove ID | test ID`: where a project's
+ * alerts go besides the owner's email. A webhook's signing secret is printed once, when it is added.
+ */
+export async function alertHooksCommand(ref: string, action: string | undefined, value: string | undefined, slack: boolean): Promise<void> {
+	let body: Record<string, unknown> = { ref };
+	if (action === 'add') {
+		if (!value) {
+			throw new UsageError('alerts hooks add needs a URL: an https:// webhook, or a Slack incoming webhook with --slack');
+		}
+		body = { ref, add: { kind: slack || value.startsWith('https://hooks.slack.com/') ? 'slack' : 'webhook', url: value } };
+	} else if (action === 'remove' || action === 'test') {
+		if (!value) {
+			throw new UsageError(`alerts hooks ${action} needs the destination's id, as alerts hooks lists it`);
+		}
+		body = { ref, [action]: value };
+	} else if (action !== undefined && action !== 'list') {
+		throw new UsageError(`unknown command: alerts hooks ${action}. alerts hooks [list], add <url> [--slack], remove <id> or test <id>`);
+	}
+	const answer = await api.call<AlertHooksAnswer>('cloud-project-alert-hooks', body);
+	emit(answer, () => {
+		if (answer.secret) {
+			say(`Added. Its signing secret, shown only now: ${bold(answer.secret)}`);
+			say(dim('Each POST carries X-SnoutData-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<body>" under this secret>.'));
+		} else if (answer.added) {
+			say('Added.');
+		}
+		if (answer.sent) {
+			say(answer.sent.error ? `The test was not delivered: ${answer.sent.error}` : `The test was delivered (${answer.sent.status}).`);
+		}
+		if (answer.hooks.length === 0) {
+			say(`No alert destinations on ${ref}; alerts go to the owner's email. Add one: snoutdata alerts hooks add <url> [--slack]`);
+			return;
+		}
+		process.stdout.write(`${table([
+			['ID', 'KIND', 'URL', 'LAST SENT'],
+			...answer.hooks.map((h) => [
+				h.id,
+				h.kind,
+				h.url,
+				h.lastSentAt ? `${h.lastSentAt.slice(0, 16).replace('T', ' ')} UTC ${h.lastError ? bold(h.lastError) : 'ok'}` : 'never'
+			])
 		])}\n`);
 	});
 }

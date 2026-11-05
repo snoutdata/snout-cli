@@ -498,7 +498,7 @@ export async function list(ref: string): Promise<void> {
 		if (answer.containers.length === 0) {
 			say(`No containers on ${ref}.`);
 			if (answer.allowance && answer.allowance.maxContainers === 0) {
-				say(dim('  Containers run on the Plus and Pro plans.'));
+				say(dim('  Containers run on every paid plan (Plus, Pro and Business).'));
 			} else {
 				say(dim('  snoutdata containers deploy <name> <image>'));
 			}

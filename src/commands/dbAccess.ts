@@ -20,7 +20,7 @@
  *     sentence is printed whole, every time, in both modes.
  */
 
-import { call } from '../api.js';
+import { call, databaseToken } from '../api.js';
 import { UsageError } from '../args.js';
 import { bold, dim, emit, say, table, warn } from '../output.js';
 
@@ -188,4 +188,17 @@ function printRevoke(result: DbAccessRevoke): void {
 	}
 	// Not commentary: what the revoke does NOT do yet. Printed under --quiet too.
 	warn(lines[lines.length - 1]!);
+}
+
+/**
+ * `db token`: a database token for you, for this project, as the password of the user it names
+ * (`snout_token`), for any driver or tool. The token alone goes
+ * to stdout, so `PGPASSWORD="$(snoutdata db token)"` works; what it is goes to stderr.
+ */
+export async function tokenCommand(ref: string): Promise<void> {
+	const answer = await databaseToken(ref);
+	emit({ ref, token: answer.access_token, user: answer.user, role: answer.db_role, expiresIn: answer.expires_in }, () => {
+		process.stdout.write(`${answer.access_token}\n`);
+		say(`The password for user ${answer.user} on ${ref}'s database: you, as ${answer.db_role}, for ${Math.round(answer.expires_in / 60)} minutes.`);
+	});
 }

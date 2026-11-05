@@ -274,7 +274,12 @@ export const MAX_REDIRECTS = 5;
  */
 export type RegistryNetwork = { resolve(host: string): Promise<readonly string[]> } | 'trusted';
 
-class Unreachable extends Error {}
+class Unreachable extends Error {
+	/** A dropped connection or a failed fetch, worth asking again; never a refused address or realm. */
+	constructor(readonly transient: boolean = false) {
+		super();
+	}
+}
 
 function parseIPv4(text: string): number[] | null {
 	const parts = text.split('.');
@@ -462,7 +467,7 @@ async function guardedGet<R extends RegistryResponse>(
 		try {
 			response = await fetcher(url.toString(), { headers: sent, redirect: 'manual' });
 		} catch {
-			throw new Unreachable();
+			throw new Unreachable(true);
 		}
 		if (![301, 302, 303, 307, 308].includes(response.status)) {
 			return response;
@@ -580,6 +585,11 @@ export function registryClient<R extends RegistryResponse>(
 				tokenHeaders.authorization = basic(credential);
 			}
 			const tokenResponse = await guardedGet(realm, tokenHeaders, fetcher, network);
+			if (transientStatus(tokenResponse.status)) {
+				// The token service down for a moment is not the image being private.
+				tokenResponse.discard?.();
+				throw new Unreachable(true);
+			}
 			if (tokenResponse.status !== 200) {
 				return response;
 			}
@@ -636,22 +646,75 @@ function platformName(p: { os?: string; architecture?: string; variant?: string 
 	return [p.os ?? '?', p.architecture ?? '?', p.variant].filter(Boolean).join('/');
 }
 
+/** A registry answer worth asking again: it is busy (429) or failed on its side (5xx). */
+function transientStatus(status: number): boolean {
+	return status === 429 || (status >= 500 && status <= 599);
+}
+
+/**
+ * How long a read waits before each time it is asked again: twice, so three answers in all. A
+ * registry's 5xx, 429 or dropped connection is often gone a moment later (the packing drill,
+ * 2026-10-30: public.ecr.aws answered nginx:1.27-alpine's arm64 manifest once with an error and
+ * the next three reads with 200).
+ */
+export const REGISTRY_RETRY_MS: readonly number[] = [250, 1000];
+
+/** How `resolveImage` waits between reads; the tests hand in their own. */
+export interface RegistryRetry {
+	readonly waits?: readonly number[];
+	readonly sleep?: (ms: number) => Promise<void>;
+}
+
+function sleepFor(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * `client.get`, asked again after a transient answer (`transientStatus`, or a fetch that failed),
+ * once per wait. Anything else, a 404 or a 401 among them, is the answer the first time; so is a
+ * refused address or realm, which a second ask would refuse the same way.
+ */
+async function getRetrying<R extends RegistryResponse>(client: RegistryClient<R>, path: string, accept: string, retry: RegistryRetry): Promise<R> {
+	const waits = retry.waits ?? REGISTRY_RETRY_MS;
+	const sleep = retry.sleep ?? sleepFor;
+	for (let attempt = 0; ; attempt++) {
+		const wait = waits[attempt];
+		let response: R;
+		try {
+			response = await client.get(path, accept);
+		} catch (error) {
+			if (wait === undefined || !(error instanceof Unreachable && error.transient)) {
+				throw error;
+			}
+			await sleep(wait);
+			continue;
+		}
+		if (wait === undefined || !transientStatus(response.status)) {
+			return response;
+		}
+		response.discard?.();
+		await sleep(wait);
+	}
+}
+
 /**
  * Ask the registry what `ref` points at, and whether it can run on the fleet.
  *
  * Returns the digest of what was asked for (an index stays an index: podman picks the arm64 entry
  * on an arm64 host, and pinning the index keeps `podman inspect` showing what the customer
  * deployed). The platforms are read from the index, or from the image's config when there is only
- * one image. Every refusal is a sentence the CLI prints as it is.
+ * one image. Every refusal is a sentence the CLI prints as it is. Each read is asked again after a
+ * transient answer (`getRetrying`), so one bad answer from a registry does not refuse a deploy.
  */
 export async function resolveImage(
 	ref: ImageReference,
 	credential: RegistryCredential | null,
 	fetcher: Fetch,
-	network: RegistryNetwork
+	network: RegistryNetwork,
+	retry: RegistryRetry = {}
 ): Promise<ResolvedImage> {
 	try {
-		return await resolveChecked(ref, credential, fetcher, network);
+		return await resolveChecked(ref, credential, fetcher, network, retry);
 	} catch {
 		// A refused address, a refused realm or redirect, a network error, a body that would not
 		// read: one sentence for all of them, so none of them is an oracle (see REGISTRY_UNREACHABLE).
@@ -663,10 +726,12 @@ async function resolveChecked(
 	ref: ImageReference,
 	credential: RegistryCredential | null,
 	fetcher: Fetch,
-	network: RegistryNetwork
+	network: RegistryNetwork,
+	retry: RegistryRetry
 ): Promise<ResolvedImage> {
 	const shown = formatImageReference(ref);
-	const client = registryClient(ref, credential, fetcher, network);
+	const registry = registryClient(ref, credential, fetcher, network);
+	const client: RegistryClient = { get: (path, accept) => getRetrying(registry, path, accept, retry) };
 	const wanted = ref.digest ?? ref.tag ?? 'latest';
 	const response = await client.get(`manifests/${wanted}`, MANIFEST_ACCEPT);
 	if (response.status === 401 || response.status === 403) {
@@ -861,7 +926,7 @@ export function mayDeployContainer(
 	if (allowance.maxContainers <= 0) {
 		return {
 			ok: false,
-			reason: 'Containers run on the Plus and Pro plans, because a container runs all the time. Upgrade this project\'s plan to deploy one.'
+			reason: 'Containers run on every paid plan (Plus, Pro and Business), because a container runs all the time. Upgrade this project\'s plan to deploy one.'
 		};
 	}
 	if (existing.includes(name)) {
@@ -1021,7 +1086,9 @@ export function formatEgressEntry(entry: EgressAllowEntry): string {
 
 /**
  * What a restricted project's containers always reach on top of its list: its own database and API
- * through the front door, which is how a container is told to reach them (`DATABASE_URL`).
+ * through the front door. The API is how a container is told to reach it (`SNOUTDATA_URL`); the
+ * database's public address stays listed for a container that brings its own connection string,
+ * though ours is the internal address (`internalDatabaseUrl`), which the host lets through itself.
  */
 export function frontDoorEgress(ref: string, dbDomain: string, apiDomain: string): EgressAllowEntry[] {
 	return [
@@ -1036,9 +1103,10 @@ export function frontDoorEgress(ref: string, dbDomain: string, apiDomain: string
 
 /**
  * What a container is given on top of the project's secrets: the platform's variables, the
- * database (the owner's connection string, through the public front door) and `PORT`. A customer's own `DATABASE_URL` or `PORT` secret wins over
- * ours, because it is theirs to point somewhere else; the `SNOUTDATA_*` names cannot be theirs
- * (`RESERVED_SECRET_PREFIXES`), so ours are always what we say they are.
+ * database (the owner's connection string: `internalDatabaseUrl` from a host that routes it, else
+ * `ownerDatabaseUrl` through the public front door) and `PORT`. A customer's own `DATABASE_URL` or
+ * `PORT` secret wins over ours, because it is theirs to point somewhere else; the `SNOUTDATA_*`
+ * names cannot be theirs (`RESERVED_SECRET_PREFIXES`), so ours are always what we say they are.
  */
 export function containerEnvironment(input: {
 	platform: Record<string, string>;
@@ -1057,6 +1125,25 @@ export function containerEnvironment(input: {
 		env.SNOUTDATA_DB_URL = input.databaseUrl;
 	}
 	return env;
+}
+
+/**
+ * The one address a container reaches its own project's database on, inside its host (359's note
+ * of 2026-11-05, `host/containerDatabase.ts`): the same on every host and for every project, since
+ * the host decides WHICH database by the container network a connection comes from. In 198.18.0.0/15
+ * (RFC 2544, never routed on the internet) and outside every private range the container networks
+ * send to their sink, so it leaves the container and goes no further than the host.
+ */
+export const CONTAINER_DATABASE_ADDRESS = '198.18.54.32';
+export const CONTAINER_DATABASE_PORT = 5432;
+
+/**
+ * `postgresql://` for the project's owner at `CONTAINER_DATABASE_ADDRESS`: never through the public
+ * door, so a project's IP allow-list does not apply to it. In the clear (`sslmode=disable`), as an
+ * internal hop: it never leaves the host, and the password is still asked.
+ */
+export function internalDatabaseUrl(input: { ref: string; role: string; password: string }): string {
+	return `postgresql://${encodeURIComponent(input.role)}:${encodeURIComponent(input.password)}@${CONTAINER_DATABASE_ADDRESS}:${CONTAINER_DATABASE_PORT}/${input.ref}?sslmode=disable`;
 }
 
 /** `postgresql://` for the project's owner through the front door (`asPublicProject`'s shape). */

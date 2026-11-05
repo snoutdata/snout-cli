@@ -7,7 +7,21 @@
  *   1. `SNOUTDATA_ACCESS_TOKEN` — CI, and an agent that was handed a token. It wins over
  *      everything, so a script's behaviour never depends on who happens to be logged in
  *      on the machine it runs on.
- *   2. `~/.snoutdata/auth.json`, mode 0600 — what `snoutdata login` writes.
+ *   2. `~/.snoutdata/auth.json`, mode 0600 — what `snoutdata login` writes. A named profile
+ *      (`--profile acme`) is `~/.snoutdata/auth.acme.json` beside it, so one machine holds a
+ *      session for each account and a command picks one; the default profile is `auth.json`,
+ *      as before profiles existed.
+ *
+ * And for the profile, decided once per run (`useProfile`, from `main.ts`):
+ *
+ *   1. `--profile`, then `SNOUTDATA_PROFILE`
+ *   2. the `profile` of the folder's link, which `snoutdata link` writes when a profile is in use
+ *   3. the one `snoutdata profile use` chose for this machine (`~/.snoutdata/profile`)
+ *   4. the default
+ *
+ * Once per run, and never per call, because a session is renewed by writing it back: the
+ * renewal has to land in the file the session was read from, or one account's refresh
+ * token overwrites another's.
  *
  * And for the project:
  *
@@ -18,7 +32,7 @@
  *      tool can get wrong.
  */
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, parse, resolve } from 'node:path';
 
@@ -38,18 +52,114 @@ export interface LinkedProject {
 	readonly name?: string;
 	/** A local project: the stack folder its `.env` is read from (`local.ts`). Absent for a cloud one. */
 	readonly local?: string;
+	/** The profile whose session works on this project, when it is not the default one. */
+	readonly profile?: string;
 }
 
-export function authPath(home = homedir()): string {
-	return join(home, '.snoutdata', 'auth.json');
-}
+export const DEFAULT_PROFILE = 'default';
 
-export function readAuth(home = homedir()): StoredAuth | null {
-	const fromEnvironment = process.env.SNOUTDATA_ACCESS_TOKEN;
-	if (fromEnvironment) {
-		return { accessToken: fromEnvironment };
+/** A profile's name is part of a file name: letters, digits, `-` and `_`, starting with a letter or digit. */
+const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/;
+
+export class ProfileNameError extends Error {}
+
+export function checkProfileName(name: string): string {
+	if (!PROFILE_NAME.test(name)) {
+		throw new ProfileNameError(
+			`"${name}" is not a profile name: use letters, digits, - and _ (up to 40), starting with a letter or digit`
+		);
 	}
-	const path = authPath(home);
+	return name;
+}
+
+let activeProfile = DEFAULT_PROFILE;
+
+/** This run's profile. Set once, by `main.ts`, before any command reads a session. */
+export function useProfile(name: string): void {
+	activeProfile = checkProfileName(name);
+}
+
+export function currentProfile(): string {
+	return activeProfile;
+}
+
+/**
+ * Which profile a run uses: the flag, then `SNOUTDATA_PROFILE`, then the folder's link, then
+ * the default. Pure, so its precedence is tested; `main.ts` hands the answer to `useProfile`.
+ */
+export function resolveProfile(options: {
+	flag?: string | undefined;
+	cwd?: string;
+	environment?: NodeJS.ProcessEnv;
+	home?: string;
+}): { readonly name: string; readonly from: 'flag' | 'environment' | 'link' | 'chosen' | 'default' } {
+	const environment = options.environment ?? process.env;
+	if (options.flag !== undefined) {
+		return { name: checkProfileName(options.flag), from: 'flag' };
+	}
+	if (environment.SNOUTDATA_PROFILE) {
+		return { name: checkProfileName(environment.SNOUTDATA_PROFILE), from: 'environment' };
+	}
+	const linked = findLink(options.cwd ?? process.cwd())?.profile;
+	if (linked) {
+		return { name: checkProfileName(linked), from: 'link' };
+	}
+	const chosen = readChosenProfile(options.home);
+	if (chosen) {
+		return { name: chosen, from: 'chosen' };
+	}
+	return { name: DEFAULT_PROFILE, from: 'default' };
+}
+
+/** Where `profile use` keeps this machine's choice: one line, the profile's name. */
+export function chosenProfilePath(home = homedir()): string {
+	return join(home, '.snoutdata', 'profile');
+}
+
+/** The profile `profile use` chose for this machine, or null when none was (or the file is not a name). */
+export function readChosenProfile(home = homedir()): string | null {
+	try {
+		const name = readFileSync(chosenProfilePath(home), 'utf8').trim();
+		return PROFILE_NAME.test(name) ? name : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * `profile use NAME`: every later command on this machine signs in as NAME unless --profile,
+ * SNOUTDATA_PROFILE or a folder's link says otherwise. Choosing the default forgets the choice.
+ */
+export function chooseProfile(name: string, home = homedir()): void {
+	const path = chosenProfilePath(home);
+	if (checkProfileName(name) === DEFAULT_PROFILE) {
+		rmSync(path, { force: true });
+		return;
+	}
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, `${name}\n`);
+}
+
+export function authPath(home = homedir(), profile = activeProfile): string {
+	return join(home, '.snoutdata', profile === DEFAULT_PROFILE ? 'auth.json' : `auth.${checkProfileName(profile)}.json`);
+}
+
+/** Every profile with a session stored on this machine, the default first. */
+export function storedProfiles(home = homedir()): string[] {
+	const directory = join(home, '.snoutdata');
+	if (!existsSync(directory)) {
+		return [];
+	}
+	const named = readdirSync(directory)
+		.map((file) => /^auth\.(.+)\.json$/.exec(file)?.[1])
+		.filter((name): name is string => name !== undefined && PROFILE_NAME.test(name) && name !== DEFAULT_PROFILE)
+		.sort();
+	return [...(existsSync(join(directory, 'auth.json')) ? [DEFAULT_PROFILE] : []), ...named];
+}
+
+/** The session a profile holds on disk, never the environment's token: what `whoami --all` lists. */
+export function readStoredAuth(home = homedir(), profile = activeProfile): StoredAuth | null {
+	const path = authPath(home, profile);
 	if (!existsSync(path)) {
 		return null;
 	}
@@ -62,16 +172,24 @@ export function readAuth(home = homedir()): StoredAuth | null {
 	}
 }
 
-export function writeAuth(auth: StoredAuth, home = homedir()): void {
-	const path = authPath(home);
+export function readAuth(home = homedir(), profile = activeProfile): StoredAuth | null {
+	const fromEnvironment = process.env.SNOUTDATA_ACCESS_TOKEN;
+	if (fromEnvironment) {
+		return { accessToken: fromEnvironment };
+	}
+	return readStoredAuth(home, profile);
+}
+
+export function writeAuth(auth: StoredAuth, home = homedir(), profile = activeProfile): void {
+	const path = authPath(home, profile);
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, `${JSON.stringify(auth, null, 2)}\n`, { mode: 0o600 });
 	// Written again, because an existing file keeps its old mode.
 	chmodSync(path, 0o600);
 }
 
-export function clearAuth(home = homedir()): void {
-	rmSync(authPath(home), { force: true });
+export function clearAuth(home = homedir(), profile = activeProfile): void {
+	rmSync(authPath(home, profile), { force: true });
 }
 
 /**
@@ -92,7 +210,7 @@ export function linkPath(directory: string): string {
 }
 
 /** Walk up from `from` looking for a link, the way git looks for `.git`. */
-export function findLink(from: string): { ref: string; directory: string; local?: string } | null {
+export function findLink(from: string): { ref: string; directory: string; local?: string; profile?: string } | null {
 	let directory = resolve(from);
 	const root = parse(directory).root;
 	for (;;) {
@@ -101,9 +219,12 @@ export function findLink(from: string): { ref: string; directory: string; local?
 			try {
 				const parsed = JSON.parse(readFileSync(path, 'utf8')) as LinkedProject;
 				if (typeof parsed.ref === 'string' && parsed.ref) {
-					return typeof parsed.local === 'string' && parsed.local
-						? { ref: parsed.ref, directory, local: parsed.local }
-						: { ref: parsed.ref, directory };
+					return {
+						ref: parsed.ref,
+						directory,
+						...(typeof parsed.local === 'string' && parsed.local ? { local: parsed.local } : {}),
+						...(typeof parsed.profile === 'string' && parsed.profile ? { profile: parsed.profile } : {})
+					};
 				}
 			} catch {
 				// Ignore and keep walking: a broken file in a parent must not stop a
@@ -117,10 +238,20 @@ export function findLink(from: string): { ref: string; directory: string; local?
 	}
 }
 
-export function writeLink(directory: string, project: LinkedProject): string {
+/**
+ * A link records the run's profile when it is not the default, so every later command in the
+ * folder signs in as the account the project belongs to without being told again.
+ */
+export function writeLink(directory: string, project: LinkedProject, profile = activeProfile): string {
 	const path = linkPath(directory);
 	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(path, `${JSON.stringify(project, null, 2)}\n`);
+	const written: LinkedProject = {
+		ref: project.ref,
+		...(project.name !== undefined ? { name: project.name } : {}),
+		...(project.local !== undefined ? { local: project.local } : {}),
+		...(profile !== DEFAULT_PROFILE ? { profile } : {})
+	};
+	writeFileSync(path, `${JSON.stringify(written, null, 2)}\n`);
 	return path;
 }
 

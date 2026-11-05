@@ -32,7 +32,15 @@ const VALUED = new Set([
 	// `db restore --at 2026-09-20T14:30:00Z`: the moment a point-in-time restore goes back to.
 	'at',
 	'region',
+	// `projects create --servers dedicated --size large`: an account's own servers, and their size.
+	// Only an account we granted them gets past the control plane.
+	'servers',
+	// `projects create --servers dedicated --size small --max-size large`: the size it may grow to on its own.
+	'max-size',
+	'size',
 	'ref',
+	// `--profile acme`: which stored sign-in this command runs as (`config.ts`), on any command.
+	'profile',
 	'file',
 	'provider',
 	// `login --domain acme.com`: whose identity provider to sign in with. A work email is
@@ -104,6 +112,10 @@ const VALUED = new Set([
 	'since',
 	// `db access grant EMAIL --level full|read`: what a person may do in the database.
 	'level',
+	// `db allow add 203.0.113.0/24 --note "office"`: what an allow-list entry is for.
+	'note',
+	// `db reset-password --grace 60`: how many minutes the old password keeps working (0 to 1440).
+	'grace',
 	// `shards --admin <url>`: a standalone Lepis router's admin API, with no SnoutData account.
 	'admin',
 	// `shards --token`: that router's admin token. LEPIS_ADMIN_TOKEN is the better home for it
@@ -121,10 +133,18 @@ const VALUED = new Set([
 	'ranges',
 	'seed',
 	'nodes',
-	// `shards table distribute <table> --column C --keyspace K`. `--range LO` names a range by
+	// `shards table distribute <table> --distribution-key C --keyspace K` (--column, its old name, too). `--range LO` names a range by
 	// its bound when that bound starts with a dash, which as a bare word would read as a flag.
 	'column',
+	'distribution-key',
 	'keyspace',
+	// `shards table auto --keyspace K --schemas a,b --min-bytes N`.
+	'schemas',
+	'min-bytes',
+	// `shards autopilot [off|advise|auto] --interval-ms N`.
+	'interval-ms',
+	// `projects scale <ref> --instances N`: how many instances of the app's API.
+	'instances',
 	'range',
 	'node',
 	'value',
@@ -155,7 +175,9 @@ const VALUED = new Set([
 	'amount',
 	'period',
 	'by',
-	'prompt'
+	'prompt',
+	// `db slow --limit 20`, `usage --tables --limit 50`: how many rows of the answer to show.
+	'limit'
 ]);
 
 
@@ -171,7 +193,8 @@ const VALUED = new Set([
 //                         admin token, asked for by name; LEPIS_ADMIN_TOKEN is what to use.)
 //   --project             SNOUTDATA_PROJECT and `link` already answer this, and `--ref` is
 //                         what every command that takes one actually reads.
-//   --output, --limit     Meant something once and never did anything.
+//   --output              Meant something once and never did anything. (`--limit` was
+//                         here too, and came back for `db slow` and `usage --tables`.)
 //
 // They are unknown flags now, which is what the README always claimed they were. A typo in
 // a script that quietly does something else is worse than a script that stops.
@@ -214,6 +237,10 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
 
 const KNOWN_BOOLEANS = new Set([
 	'json',
+	// `alerts hooks add URL --slack`: the URL is a Slack incoming webhook.
+	'slack',
+	// `whoami --all`: every profile signed in on this machine, and whose each one is.
+	'all',
 	// `db restore --window`: how far back a point-in-time restore can go, without doing one.
 	'window',
 	'help',
@@ -236,7 +263,7 @@ const KNOWN_BOOLEANS = new Set([
 	// `--quiet`: drop the commentary, keep the answer and keep the errors. Wired 2026-09-06;
 	// it parsed and did nothing before.
 	'quiet',
-	// `--yes`: only `shards` reads it. Its operations that move or delete data ask a person
+	// `--yes`: only `shards` and `projects scale` read it. Their operations ask a person
 	// first and refuse anything else unless it is passed. Every other command refuses it
 	// (main.ts, SHARDS_ONLY), since a yes that confirms nothing would tell a script author it
 	// had; the command that needs a confirmation says which flag it wants (`db restore --force`).
@@ -286,6 +313,8 @@ const KNOWN_BOOLEANS = new Set([
 	// `usage`: print the day-by-day table under the headline, which most callers do not
 	// want and --json always carries anyway.
 	'history',
+	// `usage --tables`: the largest tables too, read from the database itself.
+	'tables',
 	// `projects create --show-url`: print the connection string, password and all. Off by
 	// default since 0.10.2, because stdout is what lands in transcripts and CI logs.
 	'show-url',

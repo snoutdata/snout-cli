@@ -19,6 +19,7 @@ import {
 	page,
 	pkcePair,
 	readRedirect,
+	reportTimezone,
 	ssoDomain,
 	ssoFailure
 } from './login.js';
@@ -230,4 +231,39 @@ test('PKCE: the verifier is kept and only the challenge is sent', () => {
 	// base64url: no padding, and nothing that would need escaping in a query string.
 	assert.match(verifier, /^[A-Za-z0-9_-]+$/);
 	assert.match(challenge, /^[A-Za-z0-9_-]+$/);
+});
+
+test('a sign-in reports the timezone to set_my_timezone as a sign-in, with the session it just got', async () => {
+	const seen: { url: string; init: RequestInit }[] = [];
+	const fetcher = (async (url: string, init: RequestInit) => {
+		seen.push({ url, init });
+		return new Response('"Europe/London"', { status: 200 });
+	}) as unknown as typeof fetch;
+
+	assert.equal(await reportTimezone('jwt-1', 'Europe/London', fetcher), null);
+	assert.equal(seen.length, 1);
+	const [call] = seen;
+	assert.ok(call);
+	assert.match(call.url, /\/v1\/data\/rpc\/set_my_timezone$/);
+	assert.equal(call.init.method, 'POST');
+	assert.equal((call.init.headers as Record<string, string>).Authorization, 'Bearer jwt-1');
+	assert.deepEqual(JSON.parse(String(call.init.body)), { want_timezone: 'Europe/London', want_source: 'signin' });
+});
+
+test('a timezone that could not be recorded is a reason, never a thrown sign-in', async () => {
+	const refused = (async () => new Response('unknown timezone Mars/Olympus', { status: 400 })) as unknown as typeof fetch;
+	assert.match((await reportTimezone('jwt-1', 'Mars/Olympus', refused)) ?? '', /^HTTP 400: unknown timezone/);
+
+	const offline = (async () => {
+		throw new Error('getaddrinfo ENOTFOUND');
+	}) as unknown as typeof fetch;
+	assert.equal(await reportTimezone('jwt-1', 'Europe/London', offline), 'getaddrinfo ENOTFOUND');
+
+	let called = false;
+	const never = (async () => {
+		called = true;
+		return new Response('', { status: 200 });
+	}) as unknown as typeof fetch;
+	assert.equal(await reportTimezone('jwt-1', null, never), null);
+	assert.equal(called, false);
 });

@@ -1,7 +1,11 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { INSTALL_SH, NPM_INSTALL, installKind, olderThan, outdatedAdvice, upgradeCommand } from './version.js';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { INSTALL_SH, NPM_INSTALL, installKind, olderThan, outdatedAdvice, realScript, upgradeCommand } from './version.js';
 import { assetFor, expectedSum } from './commands/upgrade.js';
 import { EXIT, codeForStatus } from './failure.js';
 
@@ -16,6 +20,25 @@ describe('how the CLI was installed', () => {
 	});
 	test('a global npm install', () => {
 		assert.equal(installKind({ bun: false, execPath: '/usr/bin/node', script: '/usr/lib/node_modules/snoutdata/dist/snoutdata.mjs' }), 'npm');
+	});
+	test('a global npm install run through its bin symlink', () => {
+		const prefix = mkdtempSync(join(tmpdir(), 'snoutdata-npm-'));
+		try {
+			const dist = join(prefix, 'lib', 'node_modules', 'snoutdata', 'dist');
+			mkdirSync(dist, { recursive: true });
+			mkdirSync(join(prefix, 'bin'));
+			writeFileSync(join(dist, 'snoutdata.mjs'), '');
+			const link = join(prefix, 'bin', 'snoutdata');
+			symlinkSync('../lib/node_modules/snoutdata/dist/snoutdata.mjs', link);
+			assert.equal(installKind({ bun: false, execPath: '/usr/bin/node', script: link }), 'source');
+			assert.equal(installKind({ bun: false, execPath: '/usr/bin/node', script: realScript(link) }), 'npm');
+		} finally {
+			rmSync(prefix, { recursive: true, force: true });
+		}
+	});
+	test('a path that is not there is kept as given', () => {
+		assert.equal(realScript('/nowhere/snoutdata.mjs'), '/nowhere/snoutdata.mjs');
+		assert.equal(realScript(''), '');
 	});
 	test('anything else is source', () => {
 		assert.equal(installKind({ bun: false, execPath: '/usr/bin/node', script: '/repo/snout-cli/dist/snoutdata.mjs' }), 'source');

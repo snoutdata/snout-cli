@@ -21,19 +21,34 @@ import { stackShow, stackStart, stackStatus, stackStop } from './commands/stack.
 import { localDeploy, localList, localRemove, localSecretsList, localSecretsSet, localSecretsUnset } from './commands/stackFunctions.js';
 import { CliFailure, EXIT, codeForStatus, codeForThrown, missingFile } from './failure.js';
 import { canAsk, interactiveState, setInteractive } from './interactive.js';
-import { clearAuth, initStart, resolveRef, writeAuth, writeLink } from './config.js';
+import {
+	chooseProfile,
+	clearAuth,
+	currentProfile,
+	DEFAULT_PROFILE,
+	initStart,
+	readStoredAuth,
+	resolveProfile,
+	resolveRef,
+	storedProfiles,
+	useProfile,
+	writeAuth,
+	writeLink
+} from './config.js';
 import { start as deviceStart, waitForApproval } from './device.js';
 import { thisMachine } from './desktop.js';
-import { dim, emit, emitFailure, say, setJsonMode, setQuiet, warn } from './output.js';
+import { dim, emit, emitFailure, isJsonMode, say, setJsonMode, setQuiet, warn } from './output.js';
 import { login } from './commands/login.js';
 import * as projects from './commands/projects.js';
+import * as scaleCommand from './commands/scale.js';
 import * as tokens from './commands/tokens.js';
 import * as keys from './commands/keys.js';
 import * as functions from './commands/functions.js';
 import * as containers from './commands/containers.js';
 import * as secrets from './commands/secrets.js';
 import * as db from './commands/db.js';
-import { accessCommand } from './commands/dbAccess.js';
+import { accessCommand, tokenCommand } from './commands/dbAccess.js';
+import { allowCommand } from './commands/dbAllow.js';
 import * as manage from './commands/manage.js';
 import * as realtime from './commands/realtime.js';
 import * as ai from './commands/ai.js';
@@ -45,9 +60,11 @@ import { livePods, localSql, start, status as localStatus, stop } from './comman
 import { serve as serveMcp } from './commands/mcp.js';
 import { findStack, type LocalStack } from './local.js';
 import { usage } from './commands/usage.js';
+import * as sql from './commands/sql.js';
+import { metrics } from './commands/metrics.js';
 import { shards } from './commands/shards.js';
 
-import { upgrade } from './commands/upgrade.js';
+import { newerVersion, upgrade } from './commands/upgrade.js';
 import { expecting, sameEmail } from './commands/login.js';
 import { commandsFor, flagHelp } from './catalogue.js';
 import { readAuth } from './config.js';
@@ -63,16 +80,20 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata init [--name X] [--env]        a database for this folder, linked, ready to use;
                                            --env writes DATABASE_URL into ./.env (and adds
                                            .env to .gitignore) instead of printing it
-  snoutdata login [--provider github]      sign in through a browser
-  snoutdata login --email you@x.com        sign in as that account: the browser offers it,
-                                           and a different account is reported at once
+  snoutdata login                          sign in through a browser: a page with Google,
+                                           GitHub and your work email (SSO, or a code by email)
+  snoutdata login --provider google|github straight to that provider
+  snoutdata login --email you@x.com        sign in as that account: the page and Google offer
+                                           it, and a different account is reported at once
   snoutdata login --sso [--domain D]       sign in with your company's identity provider;
                                            D is a work email or a domain, and it is asked
                                            for when not given. Only the domain is sent
   snoutdata login --device                 sign in by typing a code into a browser anywhere
   snoutdata login --no-browser             print the URL instead of opening one
-  snoutdata logout
-  snoutdata whoami
+  snoutdata login --profile acme           sign in as a second account, kept beside the first;
+                                           any command takes --profile to run as it
+  snoutdata logout [--all]                 forget this profile's session (--all: every profile's)
+  snoutdata whoami [--all]                 whose session this is; --all lists every profile here
   snoutdata upgrade [--check]              install the newest CLI, the way this one was
 
   snoutdata tokens create --name ci [--expires DAYS] [--project REF]   a credential for CI, shown once
@@ -80,10 +101,14 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata tokens revoke <id|sdt_prefix>
 
   snoutdata projects list
-  snoutdata projects create --name X [--region R] [--no-wait] [--show-url]
+  snoutdata projects create --name X [--region R] [--servers dedicated --size S [--max-size M]] [--no-wait] [--show-url]
                                            prints the ref; the connection string (it holds
                                            the password) only with --show-url, or from db url
   snoutdata projects pause|resume|delete [--ref R] [--no-wait]
+  snoutdata projects scale [REF] --instances N [--yes]
+                                           more capacity for your app's API (auth, the data API,
+                                           the router): N instances; shows the plan
+                                           and asks first. Without --instances, what your plan allows
   snoutdata link --ref R                   write .snoutdata/project.json here
   snoutdata link --local [NAME|FOLDER]     use a local project (Studio's, or a snout-stack folder) here
 
@@ -129,6 +154,10 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata domains add|verify|remove <hostname> [--ref R]
 
   snoutdata usage [--ref R] [--days 30] [--history]   size, compute, and the plan's limit
+  snoutdata usage --tables [--limit 20]    and the largest tables, partitions under their parent
+  snoutdata metrics [--ref R] [--node REF] [--window hour|day|week]
+                                           CPU, memory, disk, connections, transactions,
+                                           statement time and replica lag, per server
 
   snoutdata start [--port 54322] [--dir migrations]   a Postgres here, migrated and seeded
   snoutdata stop                           stop it; the data stays
@@ -171,11 +200,23 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata teams                          teams you can share a project with
   snoutdata db url [--ref R]               print a connection string
   snoutdata db psql [--ref R] [-- ...]     open psql, with no password typed
-  snoutdata db reset-password [--ref R]
+  snoutdata db query "SQL" [--ref R]       run SQL with no psql installed; rows as a table
+  snoutdata db run FILE.sql [--ref R]      a .sql file in one transaction, no psql: the first
+                                           statement that fails rolls it all back, and says which
+  snoutdata db slow [--limit 10] [--ref R]   the statements that took the most time in all
+  snoutdata db reset-password [--grace MINUTES] [--ref R]
+                                           a new password, on the other of the project's two
+                                           owner logins (the user name changes with it); the old
+                                           one works for --grace minutes (default 60, up to 1440;
+                                           0 stops it now and ends its connections)
   snoutdata db access [list] [--ref R]     who signs in to the database as themselves
                                            (OAuth, Postgres 18), and as which role
   snoutdata db access grant EMAIL [--level full|read]   a teammate, or you; read by default
   snoutdata db access revoke EMAIL|ROLE    take it away
+  snoutdata db token [--ref R]             a password for user snout_token: you, for an hour
+  snoutdata db allow [list] [--ref R]      the addresses that may connect (empty: every address)
+  snoutdata db allow add CIDR [--note TEXT]   an address or a range, such as 203.0.113.0/24
+  snoutdata db allow remove CIDR | clear   take one off, or let every address in again
   snoutdata db export [--ref R] [--out FILE]   take a copy, and download it
   snoutdata db export --status [--ref R]       what the last copy is doing
   snoutdata db push [--dir migrations] [--dry-run]   run the .sql files, once each
@@ -188,7 +229,7 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata cluster --project REF ...       the same, for a SnoutData Cloud project, as you; there
                                            enable turns it on, nodes add makes a node pod, nodes
                                            attach REF hands a ready one over, scale --nodes N
-  snoutdata cluster nodes [add|drain|remove] | keyspace create | table distribute|reference|global
+  snoutdata cluster nodes [add|drain|remove] | keyspace create | table distribute|reference|global|auto
                    range split|merge|move | tenant pin | rebalance | scale | verify | cleanup
                                            each with --plan for the dry run (size, copy time,
                                            expected pause); one that moves or deletes data asks,
@@ -197,6 +238,8 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
                                            place on its own if it is lost or corrupt; one
                                            project slot each
   snoutdata cluster alerts [seen <id>] --project REF   what happened to the cluster that needs you
+  snoutdata cluster autopilot [off|advise|auto]   the autopilot, off unless set: advise
+                                           records what it would run, auto runs it (asks first)
   snoutdata cluster plan <operation>        the same dry run
   snoutdata cluster jobs [show|watch|cancel|resume <id>]   the durable job log
   snoutdata cluster settings [--max-write-pause-ms N ...] [--set advice_min_bytes=N,...]
@@ -208,7 +251,7 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
                                            (plus SnoutData Studio's own tools, when it is
                                             running here; SNOUTDATA_NO_DESKTOP opts out)
 
-Every command takes --json, --quiet and --help, and anything that waits takes --timeout
+Every command takes --json, --quiet, --help and --profile NAME, and anything that waits takes --timeout
 SECONDS. A failure in --json mode is {"ok":false,"code","error"} on stdout, and the exit
 code says the same thing more coarsely: 2 the command was wrong, 3 the credential, 4 not
 ready yet, 5 forbidden, 6 not found, 7 conflict, 8 quota, 9 network, 10 timed out, 11 this
@@ -222,12 +265,16 @@ SNOUTDATA_NO_INTERACTIVE) nothing is asked and it exits 3 at once.
 
 A project comes from --ref, then SNOUTDATA_PROJECT, then
 .snoutdata/project.json in this folder or a parent. A token comes from
-SNOUTDATA_ACCESS_TOKEN, then ~/.snoutdata/auth.json. The session that login writes renews
-itself as it is used; CI, which has no browser to sign in with, wants "tokens create".
+SNOUTDATA_ACCESS_TOKEN, then the profile's session: ~/.snoutdata/auth.json, or
+~/.snoutdata/auth.NAME.json for a profile. The profile comes from --profile, then
+SNOUTDATA_PROFILE, then the folder's link (link and init record it), then the one
+"profile use" chose, then the default.
+The session that login writes renews itself as it is used, in its own profile; CI, which
+has no browser to sign in with, wants "tokens create".
 
-psql, pg_dump and pg_restore run by this CLI verify the database's certificate
-(sslmode=verify-full). SNOUTDATA_DB_SSLMODE=require turns that check off, for a network
-that re-signs Postgres traffic.
+psql, pg_dump and pg_restore run by this CLI, and its own client (db push, query, run,
+slow), verify the database's certificate (sslmode=verify-full). SNOUTDATA_DB_SSLMODE=require
+turns that check off, for a network that re-signs Postgres traffic.
 
 Docs: https://docs.snoutdata.com/developers/cli
 Examples: https://github.com/snoutdata/snoutdata (a star helps other people find it)
@@ -241,6 +288,14 @@ async function run(args: ParsedArgs): Promise<number> {
 
 	if (flagBoolean(args, 'version') || group === 'version') {
 		emit({ version: VERSION }, () => process.stdout.write(`${VERSION}\n`));
+		// Only for a person at a terminal: stdout stays the bare version for scripts, and CI is
+		// never kept waiting on the registry.
+		if (!isJsonMode() && process.stderr.isTTY) {
+			const newer = await newerVersion();
+			if (newer) {
+				process.stderr.write(dim(`${newer} is out. Upgrade with: snoutdata upgrade\n`));
+			}
+		}
 		return 0;
 	}
 	// Asking for help is not an error, so it exits 0. Running with no arguments at all is
@@ -264,7 +319,7 @@ async function run(args: ParsedArgs): Promise<number> {
 						process.stdout.write(`        ${flag.padEnd(width)}  ${flagHelp(one.name, flag)}\n`);
 					}
 				}
-				process.stdout.write(`\n  Every command also takes --json, --quiet and --help.\n`);
+				process.stdout.write(`\n  Every command also takes --json, --quiet, --help and --profile.\n`);
 			});
 			return 0;
 		}
@@ -292,6 +347,15 @@ async function run(args: ParsedArgs): Promise<number> {
 		return seconds * 1000;
 	};
 
+	// `--limit`: how many rows of an answer to show, 1 to 1000.
+	const limitFlag = (fallback: number) => {
+		const value = flagNumber(args, 'limit') ?? fallback;
+		if (value < 1 || value > 1000) {
+			throw new UsageError('--limit is a whole number from 1 to 1000');
+		}
+		return value;
+	};
+
 	const ref = () => {
 		const found = resolveRef({ flag: flagString(args, 'ref') });
 		if (!found) {
@@ -311,6 +375,10 @@ async function run(args: ParsedArgs): Promise<number> {
 	// `--yes` and `--token` mean something to `shards` alone. Anywhere else a yes would confirm
 	// nothing and a token on argv is the thing args.ts refuses, so they stay refused there.
 	for (const flag of SHARDS_ONLY) {
+		// `projects scale` asks before it changes anything, so it takes --yes too.
+		if (flag === 'yes' && group === 'projects' && action === 'scale') {
+			continue;
+		}
 		if (args.flags[flag] !== undefined && group !== 'cluster') {
 			throw new UsageError(`--${flag} is only for snoutdata cluster`);
 		}
@@ -345,7 +413,9 @@ async function run(args: ParsedArgs): Promise<number> {
 				if (email) {
 					expecting(email, { accessToken: approved.token, email: signedInAs });
 				}
-				emit({ ok: true, name: approved.name ?? null, email: signedInAs ?? null }, () => say(`Signed in${signedInAs ? ` as ${signedInAs}` : ''}.`));
+				emit({ ok: true, name: approved.name ?? null, email: signedInAs ?? null, profile: currentProfile() }, () =>
+					say(`Signed in${signedInAs ? ` as ${signedInAs}` : ''}${profileNote()}.`)
+				);
 				return 0;
 			}
 			// `--domain` on its own means SSO: it is the only thing that flag is for, and
@@ -373,17 +443,25 @@ async function run(args: ParsedArgs): Promise<number> {
 				timeoutMs: timeoutMs(),
 				email: flagString(args, 'email')
 			});
-			emit({ email: result.email ?? null }, () => say(`Signed in${result.email ? ` as ${result.email}` : ''}.`));
+			emit({ email: result.email ?? null, profile: currentProfile() }, () => say(`Signed in${result.email ? ` as ${result.email}` : ''}${profileNote()}.`));
 			return 0;
 		}
 		case 'logout': {
+			if (flagBoolean(args, 'all')) {
+				const profiles = storedProfiles();
+				for (const profile of profiles) {
+					clearAuth(undefined, profile);
+				}
+				emit({ ok: true, profiles }, () => say(profiles.length > 0 ? `Signed out of ${profiles.join(', ')}.` : 'No profile was signed in.'));
+				return 0;
+			}
 			clearAuth();
 			// The env var outranks the stored session, so clearing the file while
 			// SNOUTDATA_ACCESS_TOKEN is set leaves `whoami` working and reads as a bug.
 			// A command cannot unset a variable in its parent shell, so it says so.
 			const stillSet = Boolean(process.env.SNOUTDATA_ACCESS_TOKEN);
-			emit({ ok: true, environmentTokenStillSet: stillSet }, () => {
-				say('Signed out.');
+			emit({ ok: true, profile: currentProfile(), environmentTokenStillSet: stillSet }, () => {
+				say(`Signed out${profileNote()}.`);
 				if (stillSet) {
 					say('SNOUTDATA_ACCESS_TOKEN is still set in this shell, so commands will keep working.');
 					say(dim('  unset SNOUTDATA_ACCESS_TOKEN'));
@@ -391,7 +469,61 @@ async function run(args: ParsedArgs): Promise<number> {
 			});
 			return 0;
 		}
+		case 'profile': {
+			if (action === 'use') {
+				const name = rest[0];
+				if (!name) {
+					throw new UsageError('profile use needs a profile name, as whoami --all lists them');
+				}
+				if (name !== DEFAULT_PROFILE && !storedProfiles().includes(name)) {
+					throw new UsageError(`no profile "${name}" is signed in on this machine. Sign in first: snoutdata login --profile ${name}`);
+				}
+				chooseProfile(name);
+				emit({ ok: true, profile: name }, () =>
+					say(name === DEFAULT_PROFILE ? 'Commands use the default profile again.' : `Commands now sign in as profile "${name}" unless --profile, SNOUTDATA_PROFILE or a folder's link says otherwise.`)
+				);
+				return 0;
+			}
+			if (action !== undefined && action !== 'show') {
+				throw new UsageError(`unknown command: profile ${action}. profile [show], or profile use <name>`);
+			}
+			const resolved = resolveProfile({ flag: flagString(args, 'profile') });
+			const why = {
+				flag: 'from --profile',
+				environment: 'from SNOUTDATA_PROFILE',
+				link: "from this folder's link",
+				chosen: 'chosen with profile use',
+				default: 'the default'
+			}[resolved.from];
+			emit({ profile: resolved.name, from: resolved.from }, () => say(`${resolved.name} (${why})`));
+			return 0;
+		}
 		case 'whoami': {
+			if (flagBoolean(args, 'all')) {
+				// What is stored, read from the files and not the network: a profile whose session
+				// has lapsed is still listed, and listing never renews or signs anyone in.
+				const profiles = storedProfiles().map((profile) => {
+					const stored = readStoredAuth(undefined, profile);
+					return {
+						profile,
+						email: stored?.email ?? stored?.expectedEmail ?? null,
+						active: profile === currentProfile()
+					};
+				});
+				emit({ profiles, environmentToken: Boolean(process.env.SNOUTDATA_ACCESS_TOKEN) }, () => {
+					if (profiles.length === 0) {
+						say('No profile is signed in on this machine. Run "snoutdata login [--profile NAME]".');
+					}
+					const width = Math.max(0, ...profiles.map((one) => one.profile.length));
+					for (const one of profiles) {
+						process.stdout.write(`${one.active ? '*' : ' '} ${one.profile.padEnd(width)}  ${one.email ?? dim('(email not stored)')}\n`);
+					}
+					if (process.env.SNOUTDATA_ACCESS_TOKEN) {
+						say('SNOUTDATA_ACCESS_TOKEN is set in this shell, so commands use it, not these profiles.');
+					}
+				});
+				return 0;
+			}
 			const me = await whoami();
 			// `login --email` said whose session this should be. Say so when it is not, every
 			// time, since the next command acts as whoever this is.
@@ -400,8 +532,12 @@ async function run(args: ParsedArgs): Promise<number> {
 			if (mismatch) {
 				warn(`This session is ${me.email}, and login asked for ${expected}. Run "snoutdata login --email ${expected}" to sign in as that account.`);
 			}
-			emit({ ...me, ...(expected ? { expectedEmail: expected, matchesExpected: !mismatch } : {}) }, () => {
+			const viaEnvironment = Boolean(process.env.SNOUTDATA_ACCESS_TOKEN);
+			emit({ ...me, profile: viaEnvironment ? null : currentProfile(), ...(expected ? { expectedEmail: expected, matchesExpected: !mismatch } : {}) }, () => {
 				process.stdout.write(`${me.email ?? me.id}\n`);
+				if (!viaEnvironment && currentProfile() !== DEFAULT_PROFILE) {
+					say(`profile ${currentProfile()}.`);
+				}
 				if (me.token) {
 					say(
 						`via access token ${me.token.prefix} (${me.token.name})${me.token.project ? `, limited to project ${me.token.project}` : ''}.`
@@ -456,6 +592,9 @@ async function run(args: ParsedArgs): Promise<number> {
 						teamId: teamFlag ? await projects.resolveTeam(teamFlag) : undefined,
 						name,
 						region: flagString(args, 'region'),
+						servers: flagString(args, 'servers'),
+						size: flagString(args, 'size'),
+						maxSize: flagString(args, 'max-size'),
 						wait: !flagBoolean(args, 'no-wait'),
 						timeoutMs: timeoutMs(),
 						link: undefined,
@@ -471,6 +610,14 @@ async function run(args: ParsedArgs): Promise<number> {
 						timeoutMs: timeoutMs()
 					});
 					return 0;
+				case 'scale': {
+					const wanted = flagString(args, 'instances');
+					await scaleCommand.scale(flagString(args, 'ref') ?? rest[0] ?? ref(), {
+						instances: wanted === undefined ? undefined : scaleCommand.parseInstances(wanted),
+						yes: flagBoolean(args, 'yes')
+					});
+					return 0;
+				}
 				case 'show':
 					{
 						const shown = flagString(args, 'ref') ?? rest[0] ?? ref();
@@ -864,6 +1011,13 @@ async function run(args: ParsedArgs): Promise<number> {
 			await manage.domainsCommand(ref(), action, rest[0]);
 			return 0;
 		}
+		case 'alerts': {
+			if (action !== 'hooks') {
+				throw new UsageError('alerts hooks [list], add <url> [--slack], remove <id> or test <id>; a cluster\'s alerts are cluster alerts');
+			}
+			await manage.alertHooksCommand(ref(), rest[0], rest[1], flagBoolean(args, 'slack'));
+			return 0;
+		}
 		case 'teams': {
 			await projects.listTeamsCommand();
 			return 0;
@@ -899,12 +1053,37 @@ async function run(args: ParsedArgs): Promise<number> {
 					return 0;
 				case 'psql':
 					return db.psql(ref(), rest);
+				case 'query': {
+					// Joined, so `db query select 1` works unquoted; quoting keeps the shell's hands off `*`.
+					const text = rest.join(' ').trim();
+					if (!text) {
+						throw new UsageError('db query needs SQL: snoutdata db query "select now()"');
+					}
+					return sql.query(ref(), text);
+				}
+				case 'run': {
+					if (!rest[0] || rest.length > 1) {
+						throw new UsageError('db run needs one file: snoutdata db run schema.sql');
+					}
+					return sql.run(ref(), rest[0]);
+				}
+				case 'slow':
+					return sql.slow(ref(), { limit: limitFlag(10) });
 				case 'reset-password':
-					await projects.resetPassword(ref());
+					// --grace: minutes the old password keeps working (361); absent is the control plane's hour.
+					await projects.resetPassword(ref(), flagNumber(args, 'grace'));
 					return 0;
 				case 'access':
 					// Who may sign in to the database as themselves, with OAuth (Postgres 18).
 					await accessCommand(ref(), rest, { level: flagString(args, 'level') });
+					return 0;
+				case 'token':
+					// A database token: the password of `snout_token`, for any driver or tool.
+					await tokenCommand(ref());
+					return 0;
+				case 'allow':
+					// The addresses that may connect to the database (359); empty is everyone.
+					await allowCommand(ref(), rest, { note: flagString(args, 'note') });
 					return 0;
 				case 'push':
 					// --dry-run is its own flag rather than the absence of a --yes, because
@@ -943,7 +1122,7 @@ async function run(args: ParsedArgs): Promise<number> {
 					throw new UsageError(
 						action
 							? `unknown command: db ${action}`
-							: 'db needs an action: url, psql, reset-password, access, export, push, restore'
+							: 'db needs an action: url, psql, query, run, slow, reset-password, access, token, allow, export, push, restore'
 					);
 			}
 		}
@@ -991,8 +1170,19 @@ async function run(args: ParsedArgs): Promise<number> {
 		case 'usage':
 			return usage(ref(), {
 				days: flagNumber(args, 'days'),
-				history: Boolean(args.flags['history'])
+				history: Boolean(args.flags['history']),
+				tables: flagBoolean(args, 'tables'),
+				limit: limitFlag(20)
 			});
+		case 'metrics': {
+			// `--project` as the cluster commands spell it, or `--ref` as everything else does.
+			const project = flagString(args, 'project');
+			const found = project ? resolveRef({ flag: project }) : ref();
+			if (!found) {
+				throw new UsageError('no project: pass --ref or --project');
+			}
+			return metrics(found, { node: flagString(args, 'node'), window: flagString(args, 'window') });
+		}
 		case 'mcp':
 			// Not under `db`: it is not about one database, it is the whole CLI as tools.
 			return serveMcp({ version: VERSION, allowDelete: Boolean(args.flags['allow-delete']) });
@@ -1153,6 +1343,11 @@ function wantsJson(argv: readonly string[]): boolean {
 	return (end === -1 ? argv : argv.slice(0, end)).includes('--json');
 }
 
+/** " (profile acme)" when this run is not the default profile, so a message says whose session it touched. */
+function profileNote(): string {
+	return currentProfile() === DEFAULT_PROFILE ? '' : ` (profile ${currentProfile()})`;
+}
+
 async function main(): Promise<void> {
 	// Set before the parse, so a parse failure can be reported in the shape the caller asked
 	// for. Re-set from the parsed flags below, which is authoritative once it exists.
@@ -1170,6 +1365,15 @@ async function main(): Promise<void> {
 	// Decided once, here, rather than re-derived at each rung of the auth ladder: whether
 	// there is a person to ask is a fact about this run, not about the moment.
 	setInteractive(interactiveState({ isTty: Boolean(process.stdin.isTTY), json: args.json, env: process.env }));
+	// Which stored sign-in this run is, decided before anything reads one (`config.ts`): a
+	// session renewed mid-run is written back to the profile it came from.
+	try {
+		useProfile(resolveProfile({ flag: flagString(args, 'profile') }).name);
+	} catch (error) {
+		emitFailure('usage', String(error instanceof Error ? error.message : error));
+		exitWith(EXIT.usage);
+		return;
+	}
 
 	try {
 		exitWith(await run(args));

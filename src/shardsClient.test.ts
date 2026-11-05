@@ -141,6 +141,16 @@ describe('AdminClient against a server', () => {
 		assert.equal((await client.jobs())[0]!.id, 7);
 	});
 
+	test('the design check is a GET of /v1/check', async () => {
+		answers.set('GET /v1/check', [200, '{"findings":[{"severity":"warn","code":"fk_not_indexed","table":"public.line","related":["public.payment"],"message":"m","fix":"f","sql":"create index on public.line (payment_id);","operation":null}],"summary":{"errors":0,"warnings":1,"info":0,"tables":2,"foreign_keys":1}}']);
+		const client = new AdminClient(base, TOKEN);
+		const check = await client.check();
+		assert.equal(seen[seen.length - 1]!.url, '/v1/check');
+		assert.equal(seen[seen.length - 1]!.method, 'GET');
+		assert.equal(check.findings[0]!.code, 'fk_not_indexed');
+		assert.equal(check.summary.warnings, 1);
+	});
+
 	test('advice is a GET, with the sample interval in the query when one is given', async () => {
 		const body = '{"summary":"1 recommendation.","advice":[{"op":"range.split","request":{"op":"range.split","keyspace":"k","range":"-9223372036854775808","at":"-1","to":3},"reason":"r","metric":"size","needs":[],"plan":null}],"facts":{"sampled_ms":0,"nodes":[],"ranges":[]},"settings":{},"assumptions":"a"}';
 		answers.set('GET /v1/advice', [200, body]);

@@ -3,7 +3,22 @@ import { test } from 'node:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { authPath, clearAuth, findLink, initStart, isExpired, readAuth, resolveRef, writeAuth, writeLink } from './config.js';
+import {
+	authPath,
+	clearAuth,
+	currentProfile,
+	findLink,
+	initStart,
+	isExpired,
+	readAuth,
+	readStoredAuth,
+	resolveProfile,
+	resolveRef,
+	storedProfiles,
+	useProfile,
+	writeAuth,
+	writeLink
+} from './config.js';
 import { writeEnv } from './commands/db.js';
 
 function scratch(): string {
@@ -144,4 +159,84 @@ test('a .env the CLI creates is readable by this user only', { skip: process.pla
 	const directory = scratch();
 	const { path } = writeEnv(directory, 'postgres://x');
 	assert.equal(statSync(path).mode & 0o777, 0o600);
+});
+
+test('each profile keeps its own session, and the default is auth.json as before', () => {
+	const home = scratch();
+	writeAuth({ accessToken: 'mine', email: 'me@positrondb.com' }, home);
+	writeAuth({ accessToken: 'theirs', email: 'ops@joeloliver.com' }, home, 'acme');
+	assert.equal(authPath(home), join(home, '.snoutdata', 'auth.json'));
+	assert.equal(authPath(home, 'acme'), join(home, '.snoutdata', 'auth.acme.json'));
+	assert.equal(readStoredAuth(home)?.accessToken, 'mine');
+	assert.equal(readStoredAuth(home, 'acme')?.accessToken, 'theirs');
+	if (process.platform !== 'win32') {
+		assert.equal(statSync(authPath(home, 'acme')).mode & 0o777, 0o600);
+	}
+	// Signing one out leaves the other signed in.
+	clearAuth(home, 'acme');
+	assert.equal(readStoredAuth(home, 'acme'), null);
+	assert.equal(readStoredAuth(home)?.accessToken, 'mine');
+});
+
+test('a renewed session is written back to the profile it was read from', () => {
+	// The one way profiles could sign somebody in as the wrong account: `currentToken` reads,
+	// renews and writes with no profile argument, so the run's profile has to carry it.
+	const home = scratch();
+	writeAuth({ accessToken: 'default-old', refreshToken: 'd' }, home, 'default');
+	writeAuth({ accessToken: 'acme-old', refreshToken: 'a' }, home, 'acme');
+	useProfile('acme');
+	try {
+		assert.equal(currentProfile(), 'acme');
+		const read = readAuth(home);
+		assert.equal(read?.accessToken, 'acme-old');
+		writeAuth({ ...read!, accessToken: 'acme-new' }, home);
+	} finally {
+		useProfile('default');
+	}
+	assert.equal(readStoredAuth(home, 'acme')?.accessToken, 'acme-new');
+	assert.equal(readStoredAuth(home, 'default')?.accessToken, 'default-old');
+});
+
+test('a profile comes from the flag, then SNOUTDATA_PROFILE, then the link, then the default', () => {
+	const root = scratch();
+	writeLink(root, { ref: 'linked7xt4rvz' }, 'linked');
+	assert.deepEqual(resolveProfile({ flag: 'flagged', cwd: root, environment: { SNOUTDATA_PROFILE: 'env' } }), { name: 'flagged', from: 'flag' });
+	assert.deepEqual(resolveProfile({ cwd: root, environment: { SNOUTDATA_PROFILE: 'env' } }), { name: 'env', from: 'environment' });
+	assert.deepEqual(resolveProfile({ cwd: root, environment: {} }), { name: 'linked', from: 'link' });
+	assert.deepEqual(resolveProfile({ cwd: scratch(), environment: {} }), { name: 'default', from: 'default' });
+});
+
+test('a profile name that is not a plain word is refused, since it becomes a file name', () => {
+	for (const bad of ['', '../escape', 'a/b', 'has space', '-leading', 'x'.repeat(41)]) {
+		assert.throws(() => resolveProfile({ flag: bad, cwd: scratch(), environment: {} }), /not a profile name/, bad);
+		assert.throws(() => useProfile(bad), /not a profile name/, bad);
+	}
+	assert.equal(currentProfile(), 'default');
+});
+
+test('a link records a named profile and leaves the default unwritten', () => {
+	const named = scratch();
+	writeLink(named, { ref: 'b7kq2m9xt4rvz', name: 'bamboo' }, 'solarpanda');
+	assert.deepEqual(JSON.parse(readFileSync(join(named, '.snoutdata', 'project.json'), 'utf8')), {
+		ref: 'b7kq2m9xt4rvz',
+		name: 'bamboo',
+		profile: 'solarpanda'
+	});
+	assert.equal(findLink(named)?.profile, 'solarpanda');
+
+	// Relinked as the default: the profile goes, so the folder no longer forces one.
+	writeLink(named, { ref: 'b7kq2m9xt4rvz', profile: 'solarpanda' }, 'default');
+	assert.deepEqual(JSON.parse(readFileSync(join(named, '.snoutdata', 'project.json'), 'utf8')), { ref: 'b7kq2m9xt4rvz' });
+	assert.equal(findLink(named)?.profile, undefined);
+});
+
+test('the stored profiles are listed default first, and stray files are not profiles', () => {
+	const home = scratch();
+	assert.deepEqual(storedProfiles(home), []);
+	writeAuth({ accessToken: 'z' }, home, 'zeta');
+	writeAuth({ accessToken: 'a' }, home, 'acme');
+	writeAuth({ accessToken: 'd' }, home);
+	writeFileSync(join(home, '.snoutdata', 'auth.json.bak'), '{}');
+	writeFileSync(join(home, '.snoutdata', 'auth..json'), '{}');
+	assert.deepEqual(storedProfiles(home), ['default', 'acme', 'zeta']);
 });

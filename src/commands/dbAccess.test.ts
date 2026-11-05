@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import { UsageError } from '../args.js';
 import { parseArgs } from '../args.js';
 import { setQuiet } from '../output.js';
-import { accessCommand, parseAccess, revokeLines } from './dbAccess.js';
+import { accessCommand, parseAccess, revokeLines, tokenCommand } from './dbAccess.js';
 
 setQuiet(true);
 
@@ -67,4 +67,54 @@ test('a revoke ends with the sentence about tokens already issued', () => {
 	});
 	assert.match(lines[0]!, /Took away a@b.c's full access/);
 	assert.equal(lines.at(-1), note);
+});
+
+async function withIssuer(token: string, status: number, reply: unknown, body: () => Promise<void>): Promise<{ error: unknown; asked: { url: string; auth: string | null; sent: unknown }[]; out: string }> {
+	const realFetch = globalThis.fetch;
+	const realToken = process.env.SNOUTDATA_ACCESS_TOKEN;
+	const realOut = process.stdout.write;
+	const asked: { url: string; auth: string | null; sent: unknown }[] = [];
+	let out = '';
+	process.env.SNOUTDATA_ACCESS_TOKEN = token;
+	globalThis.fetch = (async (url: unknown, init?: { body?: unknown; headers?: Record<string, string> }) => {
+		asked.push({ url: String(url), auth: init?.headers?.Authorization ?? null, sent: JSON.parse(String(init?.body ?? '{}')) });
+		return new Response(JSON.stringify(reply), { status });
+	}) as typeof fetch;
+	process.stdout.write = ((chunk: string) => {
+		out += chunk;
+		return true;
+	}) as typeof process.stdout.write;
+	try {
+		const error = await body().then(() => undefined, (e: unknown) => e);
+		return { error, asked, out };
+	} finally {
+		globalThis.fetch = realFetch;
+		process.stdout.write = realOut;
+		if (realToken === undefined) {
+			delete process.env.SNOUTDATA_ACCESS_TOKEN;
+		} else {
+			process.env.SNOUTDATA_ACCESS_TOKEN = realToken;
+		}
+	}
+}
+
+test('db token asks the issuer with the session, and prints the token alone', async () => {
+	const { error, asked, out } = await withIssuer('eyJ.session.jwt', 200, { access_token: 'eyJ.db.token', expires_in: 3600, user: 'snout_token', db_role: `oauth_${'a'.repeat(32)}` }, () => tokenCommand('b7kq2m9xt4rvz'));
+	assert.equal(error, undefined);
+	assert.equal(out, 'eyJ.db.token\n');
+	assert.equal(asked.length, 1);
+	assert.match(asked[0]!.url, /\/db\/session-token$/);
+	assert.equal(asked[0]!.auth, 'Bearer eyJ.session.jwt');
+	assert.deepEqual(asked[0]!.sent, { project_ref: 'b7kq2m9xt4rvz' });
+});
+
+test('db token with an access token says to sign in, and asks nobody', async () => {
+	const { error, asked } = await withIssuer('sdt_script', 200, {}, () => tokenCommand('b7kq2m9xt4rvz'));
+	assert.match(String((error as Error).message), /snoutdata login/);
+	assert.equal(asked.length, 0);
+});
+
+test('db token passes the issuer\'s refusal on in its own words', async () => {
+	const { error } = await withIssuer('eyJ.session.jwt', 403, { code: 'no_database_access', message: 'Your account has no database access to project b7kq2m9xt4rvz. Ask the project\'s owner to give you access.' }, () => tokenCommand('b7kq2m9xt4rvz'));
+	assert.match(String((error as Error).message), /no database access to project b7kq2m9xt4rvz/);
 });

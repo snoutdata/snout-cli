@@ -52,3 +52,10 @@ test('an older control plane, which sends no version, gets the listing it always
 	assert.deepEqual(rows[0], ['REF', 'NAME', 'STATE', 'REGION', 'LAST CONNECTION']);
 	assert.deepEqual(rows[1], ['b7kq2m9xt4rvz', 'shop', 'ready', 'us-west-2', 'never']);
 });
+
+test('a server not answering is said beside the state, which stays what the server last said', () => {
+	const rows = listRows([project({ serverSilent: true }), project({ ref: 'c8lr3n0yu5swa', serverSilent: false })]);
+	const plain = (cell: string): string => cell.replace(/\x1b\[[0-9;]*m/g, '');
+	assert.equal(plain(rows[1]![2]!), 'ready (server not answering)');
+	assert.equal(rows[2]![2], 'ready');
+});

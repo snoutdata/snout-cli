@@ -13,7 +13,8 @@
  * what lets a statement be anything the server takes, DDL included. Authentication: SCRAM-SHA-256
  * (what every SnoutData project uses), and cleartext and MD5 for a server configured that way, as
  * libpq would. `COPY ... FROM STDIN` is fed the rows the script carries, as psql does; a `COPY ...
- * TO STDOUT` is read and dropped, since nothing here prints rows.
+ * TO STDOUT` is read and dropped. A result's rows come back as text with their column names, which
+ * is what `db query` prints.
  *
  * ## TLS, as libpq does it
  *
@@ -101,6 +102,26 @@ interface Message {
 export interface PgResult {
 	readonly rows: (string | null)[][];
 	readonly command: string | null;
+	/** The names of the last result's columns; absent when the statement returned no rows at all (DDL, an UPDATE). */
+	readonly columns?: string[];
+	/** What the server said along the way (`NOTICE:  ...`), as psql prints it. */
+	readonly notices?: string[];
+}
+
+/** A RowDescription's column names. Each field is a name and then 18 bytes `db query` has no use for. */
+function columnNames(body: Buffer): string[] {
+	const count = body.readInt16BE(0);
+	const names: string[] = [];
+	let at = 2;
+	for (let i = 0; i < count; i++) {
+		const end = body.indexOf(0, at);
+		if (end < 0) {
+			break;
+		}
+		names.push(body.toString('utf8', at, end));
+		at = end + 1 + 18;
+	}
+	return names;
 }
 
 const PROTOCOL_3 = 196608;
@@ -476,6 +497,8 @@ export class PgSession {
 	async query(sql: string, copyData?: string): Promise<PgResult> {
 		this.send('Q', cstring(sql));
 		let rows: (string | null)[][] = [];
+		let columns: string[] | undefined;
+		const notices: string[] = [];
 		let command: string | null = null;
 		let failure: PgServerError | null = null;
 		for (;;) {
@@ -483,7 +506,13 @@ export class PgSession {
 			switch (message.type) {
 				case 'T':
 					rows = [];
+					columns = columnNames(message.body);
 					break;
+				case 'N': {
+					const fields = fieldsOf(message.body);
+					notices.push(`${fields.get('V') ?? fields.get('S') ?? 'NOTICE'}:  ${fields.get('M') ?? ''}`);
+					break;
+				}
 				case 'D': {
 					const count = message.body.readInt16BE(0);
 					const row: (string | null)[] = [];
@@ -509,7 +538,7 @@ export class PgSession {
 					break;
 				case 'G':
 					if (copyData === undefined) {
-						this.send('f', cstring('db push has no rows for this COPY: the lines after it, ending in \\., are what it reads'));
+						this.send('f', cstring('there are no rows for this COPY: the lines after it, ending in \\., are what it reads'));
 					} else {
 						if (copyData.length > 0) {
 							this.send('d', Buffer.from(copyData, 'utf8'));
@@ -524,9 +553,9 @@ export class PgSession {
 					if (failure) {
 						throw failure;
 					}
-					return { rows, command };
+					return { rows, command, ...(columns ? { columns } : {}), ...(notices.length > 0 ? { notices } : {}) };
 				default:
-					// NoticeResponse, ParameterStatus, CopyOutResponse and its CopyData/CopyDone,
+					// ParameterStatus, CopyOutResponse and its CopyData/CopyDone,
 					// EmptyQueryResponse, NotificationResponse: read and let go.
 					break;
 			}

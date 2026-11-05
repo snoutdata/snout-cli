@@ -9,6 +9,7 @@
  * stop.
  */
 
+import { realpathSync } from 'node:fs';
 import { basename } from 'node:path';
 
 declare const __SNOUTDATA_VERSION__: string | undefined;
@@ -33,11 +34,27 @@ export const NPM_INSTALL = 'npm install -g snoutdata@latest';
  */
 export type InstallKind = 'binary' | 'npx' | 'npm' | 'source';
 
+/**
+ * The file a script path ends at. `npm install -g` puts the command on PATH as a symlink
+ * (`<prefix>/bin/snoutdata -> ../lib/node_modules/snoutdata/dist/snoutdata.mjs`) and argv[1] is
+ * the link, so read as given it has no node_modules in it and a global install looked like source.
+ */
+export function realScript(path: string): string {
+	if (!path) {
+		return path;
+	}
+	try {
+		return realpathSync(path);
+	} catch {
+		return path;
+	}
+}
+
 export function installKind(
 	facts: { bun: boolean; execPath: string; script: string } = {
 		bun: typeof (process.versions as Record<string, string | undefined>).bun === 'string',
 		execPath: process.execPath,
-		script: process.argv[1] ?? ''
+		script: realScript(process.argv[1] ?? '')
 	}
 ): InstallKind {
 	// Either separator: a Windows path is read on Linux in the tests, and basename() there splits on / only.

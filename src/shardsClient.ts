@@ -44,6 +44,14 @@ export interface PlanMove {
 	expected_pause_ms: number;
 }
 
+/** What `table.auto` chose for one table, and why (`shard` names the key column). */
+export interface PlanChoice {
+	table: string;
+	choice: 'shard' | 'reference' | 'leave';
+	column: string | null;
+	why: string;
+}
+
 /** What `POST /v1/plan` answers: the dry run every operation has. */
 export interface Plan {
 	op: string;
@@ -57,6 +65,8 @@ export interface Plan {
 	max_write_pause_ms: number;
 	assumptions?: string;
 	warnings: string[];
+	/** `table.auto` only: every table it read, chosen or left alone. */
+	choices?: PlanChoice[];
 }
 
 export interface ClusterRange {
@@ -166,6 +176,8 @@ export interface JobSummary {
 	finished_at: string | null;
 	steps: number;
 	steps_done: number;
+	/** Who started it: `lepis` for the autopilot, `person` otherwise (routers older than 11b say neither). */
+	actor?: string;
 }
 
 export interface JobStep {
@@ -217,6 +229,26 @@ export interface Recommendation {
 	plan_error?: { kind: string; message: string };
 }
 
+/** One finding of the design check (`GET /v1/check`): what the keys say about a table. */
+export interface CheckFinding {
+	severity: 'error' | 'warn' | 'info';
+	code: string;
+	table: string;
+	related: string[];
+	message: string;
+	fix: string;
+	/** SQL to run through the router (an index, a column). */
+	sql: string | null;
+	/** A body `POST /v1/jobs` takes as it is. */
+	operation: OpBody | null;
+}
+
+/** What `GET /v1/check` answers: every finding, most severe first, and the counts. */
+export interface DesignCheck {
+	findings: CheckFinding[];
+	summary: { errors: number; warnings: number; info: number; tables: number; foreign_keys: number };
+}
+
 /** What `GET /v1/advice` answers. Byte counts are numbers; range bounds are strings. */
 export interface Advice {
 	summary: string;
@@ -248,6 +280,34 @@ export const ADVICE_SETTINGS = [
 	'advice_conn_pct'
 ] as const;
 export type AdviceSettingName = (typeof ADVICE_SETTINGS)[number];
+
+/** The autopilot's modes. Off unless a person sets another. */
+export const AUTOPILOT_MODES = ['off', 'advise', 'auto'] as const;
+export type AutopilotMode = (typeof AUTOPILOT_MODES)[number];
+
+/** What `GET /v1/autopilot` answers: the mode, the interval, and what it decided last. */
+export interface AutopilotState {
+	mode: AutopilotMode;
+	interval_ms: number;
+	last: {
+		mode: string;
+		at: string;
+		decision: { kind: string; why?: string; request?: OpBody; job?: number; error?: string };
+	} | null;
+	/**
+	 * SnoutData Cloud's own half (control plane migration 300): the owner's choice, and what the
+	 * control plane last ran of the router's proposals. The Cloud tells the router only to advise, so
+	 * on `auto` this, not `mode`, is the owner's choice. Absent from a self-hosted router and from a
+	 * control plane before 300.
+	 */
+	cloud?: {
+		mode: AutopilotMode;
+		taken_at: string | null;
+		request: OpBody | null;
+		job: number | null;
+		error: string | null;
+	};
+}
 
 /** A job that will not change again. */
 export function isFinished(state: string): boolean {
@@ -282,6 +342,11 @@ export interface ShardsClient {
 	settings(patch: Partial<Record<SettingName | AdviceSettingName, number>>): Promise<{ settings: Record<string, number> }>;
 	/** The advisor's recommendations. `sampleMs`: how long to measure write rates over (0: none). */
 	advice(sampleMs?: number): Promise<Advice>;
+	/** The design check: distribution keys, foreign keys and indexes, read from the schema. */
+	check(): Promise<DesignCheck>;
+	/** The autopilot's mode and what it decided last. */
+	autopilot(): Promise<AutopilotState>;
+	setAutopilot(patch: { autopilot?: AutopilotMode; autopilot_interval_ms?: number }): Promise<{ settings: Record<string, unknown> }>;
 }
 
 export interface ShardsTarget {
@@ -415,6 +480,18 @@ export class AdminClient implements ShardsClient {
 		return this.#call('GET', sampleMs === undefined ? '/v1/advice' : `/v1/advice?sample_ms=${Math.max(0, Math.floor(sampleMs))}`);
 	}
 
+	check(): Promise<DesignCheck> {
+		return this.#call('GET', '/v1/check');
+	}
+
+	autopilot(): Promise<AutopilotState> {
+		return this.#call('GET', '/v1/autopilot');
+	}
+
+	setAutopilot(patch: { autopilot?: AutopilotMode; autopilot_interval_ms?: number }): Promise<{ settings: Record<string, unknown> }> {
+		return this.#call('POST', '/v1/settings', patch);
+	}
+
 	async #call<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
 		const url = `${this.target}${path}`;
 		let response: Response;
@@ -512,6 +589,7 @@ const CLOUD_ACTIONS: Record<string, string> = {
 	'table.distribute': 'distribute',
 	'table.reference': 'reference',
 	'table.global': 'global',
+	'table.auto': 'auto',
 	'range.split': 'split',
 	'range.merge': 'merge',
 	'range.move': 'move',
@@ -597,7 +675,19 @@ export class CloudShardsClient implements ShardsClient {
 		return this.#send({ action: 'advice', ...(sampleMs === undefined ? {} : { sampleMs: Math.max(0, Math.floor(sampleMs)) }) });
 	}
 
-	/** Turn sharding on: the router joins the project's pod, which restarts the database once. */
+	check(): Promise<DesignCheck> {
+		return this.#send({ action: 'check' });
+	}
+
+	autopilot(): Promise<AutopilotState> {
+		return this.#send({ action: 'autopilot' });
+	}
+
+	setAutopilot(patch: { autopilot?: AutopilotMode; autopilot_interval_ms?: number }): Promise<{ settings: Record<string, unknown> }> {
+		return this.#send({ action: 'settings', settings: patch });
+	}
+
+	/** Turn sharding on: the router and the services start in pods of their own; the database keeps running. */
 	enable(planOnly: boolean): Promise<Plan | { sharded: boolean; changed: boolean; note?: string }> {
 		return this.#send({ action: 'enable', ...(planOnly ? { plan: true } : {}) });
 	}

@@ -205,7 +205,7 @@ const PLATFORM_OWNER = /^(snoutpod_admin|snout_[a-z]+_admin)$/;
 /** Schemas every project is given, whose objects only the platform makes. */
 const PLATFORM_SCHEMAS = new Set([
 	'snout_identity', 'snout_files', 'push', 'snout_live', 'snout_realtime', '_realtime', 'graphql', 'snout_graph',
-	'snout_ext', 'net', 'cron', 'pgbouncer', 'vault', 'pgsodium',
+	'snout_ext', 'net', 'cron', 'pgbouncer', 'vault', 'pgsodium', 'lepis',
 	// The same schemas in a database made before they had these names.
 	'auth', 'storage', 'realtime', 'graphql_public', 'extensions'
 ]);

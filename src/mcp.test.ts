@@ -10,6 +10,7 @@ function operations(over: Partial<McpOperations> = {}): McpOperations {
 		listProjects: async () => ({ projects: [{ ref: 'b7kq2m9xt4rvz', state: 'ready' }] }),
 		createProject: async (input) => ({ ref: 'c3hnp8w5y2qkd', name: input.name }),
 		setProjectState: async (verb, ref) => ({ verb, ref, changed: true }),
+		scaleProject: async (ref, instances, apply) => ({ ref, instances, apply }),
 		connection: async (ref) => ({ uri: `postgres://${ref}_owner:secret@${ref}.db.snoutdata.com/${ref}`, state: 'ready', wakesInstantly: true }),
 		pushMigrations: async (ref, options) => ({ ref, applied: options.dryRun ? [] : ['001-a.sql'] }),
 		usage: async (ref, days) => ({ ref, days: days ?? 30, storage: { state: 'ok' } }),
@@ -531,6 +532,8 @@ function fakeShards(states: Job['state'][] = ['running', 'done']) {
 			return { catalog: true, epoch: 3 };
 		},
 		ops: async () => ({ ops: [], settings: {} }),
+		autopilot: async () => ({ mode: 'off', interval_ms: 60000, last: null }),
+		setAutopilot: async (patch) => ({ settings: patch }),
 		plan: async (body) => {
 			calls.push('plan');
 			sent.push(body);
@@ -563,6 +566,10 @@ function fakeShards(states: Job['state'][] = ['running', 'done']) {
 		advice: async (sampleMs) => {
 			calls.push(`advice ${sampleMs ?? '-'}`);
 			return advice;
+		},
+		check: async () => {
+			calls.push('check');
+			return { findings: [{ severity: 'error' as const, code: 'should_be_reference', table: 'public.status', related: [], message: 'm', fix: 'f', sql: null, operation: { op: 'table.reference', table: 'public.status' } }], summary: { errors: 1, warnings: 0, info: 0, tables: 3, foreign_keys: 2 } };
 		}
 	};
 	return { client, calls, sent };
@@ -759,4 +766,13 @@ test('container egress is shown, set and cleared as the CLI does, one change at 
 	const by = new Map(tools.map((t) => [t.name, t.annotations]));
 	assert.equal(by.get('container_egress')?.readOnlyHint, true);
 	assert.equal(by.get('set_container_egress')?.readOnlyHint, false);
+});
+
+test('scale_project only plans without confirm, applies with it, and checks the number', async () => {
+	assert.deepEqual(JSON.parse(text(await call('scale_project', { ref: 'b7kq2m9xt4rvz', instances: 2 }))), { ref: 'b7kq2m9xt4rvz', instances: 2, apply: false });
+	assert.deepEqual(JSON.parse(text(await call('scale_project', { ref: 'b7kq2m9xt4rvz', instances: 2, confirm: true }))), { ref: 'b7kq2m9xt4rvz', instances: 2, apply: true });
+	// confirm with no number is only the question of what the plan allows.
+	assert.equal(JSON.parse(text(await call('scale_project', { ref: 'b7kq2m9xt4rvz', confirm: true }))).apply, false);
+	assert.ok(isError(await call('scale_project', { ref: 'b7kq2m9xt4rvz', instances: 4 })));
+	assert.ok(isError(await call('scale_project', { instances: 2 })));
 });

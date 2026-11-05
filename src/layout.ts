@@ -38,6 +38,11 @@ export function fnRoute(name: string, query = ''): Route {
 	return { path: `/v1/fn/${name}${query}`, oldPath: `/functions/v1/${name}${query}` };
 }
 
+/** A data API route: `/v1/data<route>`, earlier `/rest/v1<route>` (a procedure is `/rpc/<name>`). */
+export function dataRoute(route: string): Route {
+	return { path: `/v1/data${route}`, oldPath: `/rest/v1${route}` };
+}
+
 /** An identity route: `/v1/identity<route>`, earlier `/auth/v1<oldRoute>`. */
 export function identityRoute(route: string, oldRoute: string): Route {
 	return { path: `/v1/identity${route}`, oldPath: `/auth/v1${oldRoute}` };

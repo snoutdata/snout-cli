@@ -9,6 +9,7 @@
 
 import * as api from '../api.js';
 import { call, listProjects, waitForReady, waitForSettled, type Project } from '../api.js';
+import { UsageError } from '../args.js';
 import { CliFailure } from '../failure.js';
 import { writeLink } from '../config.js';
 import { bold, dim, emit, relative, say, table } from '../output.js';
@@ -42,7 +43,9 @@ export function listRows(projects: readonly Project[]): string[][] {
 			// somebody reading this is concerned: it is the state they need to know
 			// about, and showing `ready` beside a database that rejects every INSERT
 			// is the listing lying to them.
-			p.readOnly ? bold('read-only') : p.state === 'ready' ? p.state : bold(p.state),
+			// Its server not answering is said BESIDE the state, never instead of it: the state is
+			// what the server last reported, and the silence does not change it.
+			`${p.readOnly ? bold('read-only') : p.state === 'ready' ? p.state : bold(p.state)}${p.serverSilent ? ` ${bold('(server not answering)')}` : ''}`,
 			p.region,
 			...(versions ? [typeof p.postgresVersion === 'number' ? String(p.postgresVersion) : '-'] : []),
 			relative(p.lastConnectionAt)
@@ -57,15 +60,29 @@ export async function create(options: {
 	link?: string | undefined;
 	/** A team id, already resolved and checked by `resolveTeam`. */
 	teamId?: string | undefined;
-	/** How long to wait for it to start, when waiting. Default five minutes. */
+	/** `dedicated` for the account's own servers (only with a grant), else shared. */
+	servers?: string | undefined;
+	/** A dedicated project's server size: small, medium or large. */
+	size?: string | undefined;
+	/** The largest size it may grow to on its own; defaults to `size`. */
+	maxSize?: string | undefined;
+	/** How long to wait for it to start, when waiting. Default five minutes, fifteen for dedicated. */
 	timeoutMs?: number | undefined;
 	/** Print the connection string, password and all. Off by default (see below). */
 	showUrl?: boolean | undefined;
 }): Promise<void> {
+	const dedicated = options.servers === 'dedicated';
+	if (options.servers !== undefined && options.servers !== 'dedicated' && options.servers !== 'shared') {
+		throw new UsageError('--servers is shared or dedicated');
+	}
+	if (dedicated !== (options.size !== undefined)) {
+		throw new UsageError(dedicated ? '--servers dedicated needs --size small, medium or large' : '--size goes with --servers dedicated');
+	}
 	const created = await call<{ project: Project; password: string }>('cloud-project-create', {
 		name: options.name,
 		region: options.region,
-		teamId: options.teamId
+		teamId: options.teamId,
+		...(dedicated ? { placement: 'dedicated', size: options.size, ...(options.maxSize ? { maxSize: options.maxSize } : {}) } : {})
 	});
 	const ref = created.project.ref;
 	say(`Created ${ref}.`);
@@ -77,7 +94,8 @@ export async function create(options: {
 		// the first one had not.
 		let shown = '';
 		project = await waitForReady(ref, {
-			timeoutMs: options.timeoutMs,
+			// A dedicated project's first of a size starts its servers first, about 5 minutes (D4).
+			timeoutMs: options.timeoutMs ?? (dedicated ? 15 * 60_000 : undefined),
 			onTick: (state) => {
 				if (state !== shown) {
 					shown = state;
@@ -151,16 +169,38 @@ export async function action(
 	});
 }
 
-export async function resetPassword(ref: string): Promise<void> {
-	const result = await call<{ ref: string; user: string; password: string; appliesIn: string }>(
-		'cloud-project-reset-password',
-		{ ref }
-	);
+/**
+ * `snoutdata db reset-password [--grace MINUTES]`. The project has two owner logins that take turns
+ * (361): the new password belongs to the login not in use, so the USER NAME changes with it, and the
+ * old login's password keeps working for the grace (the control plane's default, an hour, when not
+ * given; 0 stops it at once and ends its sessions, for a leaked password).
+ */
+export async function resetPassword(ref: string, graceMinutes?: number): Promise<void> {
+	if (graceMinutes !== undefined && (graceMinutes < 0 || graceMinutes > 1440)) {
+		throw new UsageError('--grace is a whole number of minutes from 0 to 1440 (24 hours)');
+	}
+	const result = await call<{
+		ref: string;
+		user: string;
+		password: string;
+		uri?: string;
+		appliesIn: string;
+		previousUser?: string;
+		graceMinutes?: number;
+		oldPasswordUntil?: string;
+		oldPassword?: string;
+	}>('cloud-project-reset-password', { ref, ...(graceMinutes !== undefined ? { graceMinutes } : {}) });
 	emit(result, () => {
 		process.stdout.write(`${result.password}\n`);
 		// The honest bit, and it is why this is not silent: the new password becomes true
 		// when the host applies it, a few seconds from now (no restart since migration 120).
 		say(`New password for ${result.user}. It applies ${result.appliesIn}.`);
+		if (result.previousUser && result.previousUser !== result.user) {
+			say(`The user name changed from ${result.previousUser} to ${result.user}: update both wherever the URL is kept.`);
+		}
+		if (result.oldPassword) {
+			say(result.oldPassword);
+		}
 	});
 }
 

@@ -53,12 +53,14 @@ export interface McpOperations {
 	listProjects(): Promise<unknown>;
 	createProject(input: { name: string; region?: string; teamId?: string }): Promise<unknown>;
 	setProjectState(verb: 'pause' | 'resume' | 'delete', ref: string): Promise<unknown>;
+	/** Scale's plan for `instances` (or, with none, what the plan allows), or with apply the change itself (`cloud-project-spread`). */
+	scaleProject(ref: string, instances: number | undefined, apply: boolean): Promise<unknown>;
 	connection(ref: string): Promise<{ uri: string; state: string; wakesInstantly: boolean }>;
 	pushMigrations(ref: string, options: { dir?: string; dryRun?: boolean }): Promise<unknown>;
 	usage(ref: string, days?: number): Promise<unknown>;
 	exportStatus(ref: string): Promise<unknown>;
 	requestExport(ref: string): Promise<unknown>;
-	resetPassword(ref: string): Promise<unknown>;
+	resetPassword(ref: string, graceMinutes?: number): Promise<unknown>;
 	listTeams(): Promise<unknown>;
 	deployFunction(
 		ref: string,
@@ -194,6 +196,7 @@ export const SHARD_OPS = [
 	'table.distribute',
 	'table.reference',
 	'table.global',
+	'table.auto',
 	'range.split',
 	'range.merge',
 	'range.move',
@@ -290,6 +293,12 @@ export const TOOLS: readonly ToolDefinition[] = [
 		inputSchema: object({ ref: STRING }, ['ref'])
 	},
 	{
+		name: 'scale_project',
+		description:
+			"More capacity for a project's app API (auth, the data API and the router): 1 to 3 instances of it take its calls. The database is not copied by this, and it is not failover: keeping a project running is the cloud's job on every plan. Without instances, says how many it runs now and how many the plan allows. Without confirm: true it only returns the plan for that number and changes nothing: show it to the user, and when they agree call again with confirm: true. A refusal (the plan, not open yet, a sharded project, no room) comes back in a sentence to show as it is.",
+		inputSchema: object({ ref: STRING, instances: { type: 'integer', enum: [1, 2, 3] }, confirm: { type: 'boolean' } }, ['ref'])
+	},
+	{
 		name: 'resume_project',
 		description: 'Start a paused project without waiting for a connection to wake it, and wait until it is ready.',
 		inputSchema: object({ ref: STRING }, ['ref'])
@@ -316,8 +325,8 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'reset_password',
-		description: "Rotate the project's database password. THE OLD ONE STOPS WORKING usually within fifteen seconds (longer while the host is busy starting other databases), including any DATABASE_URL already written into a file or a running process; connections already open keep working. Returns the new connection URL, which works once the change applies (wait about fifteen seconds before connecting, and retry a refusal for up to two minutes). Use it when a credential has leaked, not routinely.",
-		inputSchema: object({ ref: STRING }, ['ref'])
+		description: "Rotate the project's database password. The new password belongs to the other of the project's two owner logins, so the USER NAME in the URL changes too. The old password keeps working for graceMinutes (default 60, 0 to 1440), then new connections with it are refused; connections already open keep working. graceMinutes 0 stops the old password as soon as the change applies and ends its connections: use 0 when a credential has leaked. Returns the new connection URL, which works once the change applies (wait about fifteen seconds before connecting, and retry a refusal for up to two minutes). Not for routine use.",
+		inputSchema: object({ ref: STRING, graceMinutes: { type: 'number' } }, ['ref'])
 	},
 	{
 		name: 'list_teams',
@@ -372,7 +381,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'deploy_container',
-		description: "Run a Docker image all the time beside the project, at https://<ref>.api.snoutdata.com/containers/v1/<name>/ (no API key needed there: the container authenticates its own callers). The image tag is pinned to the digest it points at now and must include linux/arm64. It listens on PORT (port, default 8080) and gets DATABASE_URL and the project's secrets in its environment. STATELESS: anything written inside it is lost on every restart or redeploy, so state belongs in the database. Plus and Pro plans only. A private image needs a person's first deploy with the CLI (no tool takes a registry token); a redeploy reuses the stored login. Returns at once: poll list_containers until the status is running or failed.",
+		description: "Run a Docker image all the time beside the project, at https://<ref>.api.snoutdata.com/containers/v1/<name>/ (no API key needed there: the container authenticates its own callers). The image tag is pinned to the digest it points at now and must include linux/arm64. It listens on PORT (port, default 8080) and gets DATABASE_URL and the project's secrets in its environment. STATELESS: anything written inside it is lost on every restart or redeploy, so state belongs in the database. Paid plans only (Plus, Pro and Business). A private image needs a person's first deploy with the CLI (no tool takes a registry token); a redeploy reuses the stored login. Returns at once: poll list_containers until the status is running or failed.",
 		inputSchema: object({ ref: STRING, name: STRING, image: STRING, port: { type: 'integer' } }, ['ref', 'name', 'image'])
 	},
 	{
@@ -471,6 +480,12 @@ export const TOOLS: readonly ToolDefinition[] = [
 		inputSchema: object({ project: PROJECT, sampleMs: { type: 'integer' } })
 	},
 	{
+		name: 'cluster_check',
+		description:
+			"The cluster's design check: reads every table's distribution key, foreign keys, unique keys and indexes, and says what keeps related rows off one node or makes a query scan (a table under a distributed one with no distribution key column, a foreign key without the key, a lookup that should be a reference table, a foreign key with no index). Each finding has a fix, SQL to run, or an `operation` cluster_run takes as it is. RUNS NOTHING.",
+		inputSchema: object({ project: PROJECT })
+	},
+	{
 		name: 'cluster_plan',
 		description:
 			'The dry run of one cluster operation: its steps, what moves where, rows, bytes, the estimated copy time and the expected write pause. Changes nothing. Planning an operation is what lets cluster_run run it.',
@@ -514,7 +529,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 const READ_ONLY_TOOLS = new Set([
 	'whoami', 'list_projects', 'get_connection_url', 'usage', 'export_status', 'list_teams', 'list_tokens',
 	'list_functions', 'list_function_secrets', 'function_logs', 'container_egress', 'get_project', 'list_products', 'list_domains', 'restore_window',
-	'cluster_status', 'cluster_advice', 'cluster_plan', 'cluster_jobs', 'cluster_watch_job'
+	'cluster_status', 'cluster_advice', 'cluster_check', 'cluster_plan', 'cluster_jobs', 'cluster_watch_job'
 ]);
 const DESTRUCTIVE_TOOLS = new Set(['delete_project', 'delete_function', 'reset_password', 'revoke_token', 'remove_domain', 'cluster_run']);
 
@@ -746,6 +761,15 @@ async function shardsTool(
 						: {})
 				});
 			}
+			case 'cluster_check': {
+				const check = await client.check();
+				return said(id, {
+					...check,
+					...(check.findings.length > 0
+						? { next: 'Nothing has run. Show the user the findings, errors first. SQL is theirs to run; an operation is planned with cluster_plan and run with cluster_run.' }
+						: {})
+				});
+			}
 			case 'cluster_plan': {
 				const body = operationArg(args, name);
 				if (typeof body === 'string') {
@@ -905,6 +929,7 @@ async function callTool(
 		'get_connection_url',
 		'pause_project',
 		'resume_project',
+		'scale_project',
 		'delete_project',
 		'push_migrations',
 		'usage',
@@ -972,6 +997,15 @@ async function callTool(
 				return said(id, await operations.setProjectState('pause', ref!));
 			case 'resume_project':
 				return said(id, await operations.setProjectState('resume', ref!));
+			case 'scale_project': {
+				const instances = args.instances;
+				if (instances !== undefined && instances !== 1 && instances !== 2 && instances !== 3) {
+					return said(id, 'instances is 1, 2 or 3.', true);
+				}
+				// No surprise changes: without confirm, the plan only.
+				const apply = args.confirm === true && instances !== undefined;
+				return said(id, await operations.scaleProject(ref!, instances, apply));
+			}
 			case 'usage': {
 				const days = typeof args.days === 'number' ? args.days : undefined;
 				return said(id, await operations.usage(ref!, days));
@@ -983,12 +1017,14 @@ async function callTool(
 			case 'reset_password': {
 				// The description promises a URL, and a bare password left a model to assemble one.
 				// `connection` serves the new password as soon as the reset returns.
-				const reset = (await operations.resetPassword(ref!)) as { appliesIn?: string };
-				const details = await operations.connection(ref!);
+				const grace = typeof args.graceMinutes === 'number' ? args.graceMinutes : undefined;
+				const reset = (await operations.resetPassword(ref!, grace)) as { appliesIn?: string; uri?: string; oldPassword?: string };
+				const details = reset.uri ? null : await operations.connection(ref!);
 				return said(id, {
-					url: details.uri,
+					url: reset.uri ?? details?.uri,
 					appliesIn: reset.appliesIn ?? 'within about fifteen seconds',
-					next: 'Wait about fifteen seconds before connecting with this URL, and retry a refusal for up to two minutes: until the change applies (usually 5 to 15 seconds, longer while the host is busy) the new password is refused and the old one still works, which does not mean the new one is wrong. Then update DATABASE_URL wherever it is set.',
+					...(reset.oldPassword ? { oldPassword: reset.oldPassword } : {}),
+					next: 'Wait about fifteen seconds before connecting with this URL, and retry a refusal for up to two minutes: until the change applies (usually 5 to 15 seconds, longer while the host is busy) the new password is refused and the old one still works, which does not mean the new one is wrong. Then update DATABASE_URL wherever it is set, user name included: it changes with the password.',
 					warning: 'This URL contains a live database password. Put it in an environment variable, not in a file that is committed.'
 				});
 			}

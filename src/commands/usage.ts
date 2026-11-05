@@ -13,7 +13,11 @@
 import * as api from '../api.js';
 import { bold, dim, emit, say, table } from '../output.js';
 import { describeBytes } from './db.js';
-import { describeCompute, summariseUsage, type UsageDay, type UsageLimit } from '../usage.js';
+import { describeCompute, storageOutlook, summariseUsage, type UsageDay, type UsageLimit } from '../usage.js';
+import { describeTables, largestTables } from './sql.js';
+
+/** The docs section on what a project does at its storage limit. */
+const LIMIT_DOCS = 'https://docs.snoutdata.com/cloud/limits#storage-over-the-limit-means-read-only';
 
 interface UsageAnswer {
 	ref: string;
@@ -24,14 +28,20 @@ interface UsageAnswer {
 	limit: UsageLimit | null;
 }
 
-export async function usage(ref: string, options: { days?: number; history?: boolean } = {}): Promise<number> {
+/**
+ * `--tables` adds the largest tables, read from the database itself over the CLI's own client
+ * (`sql.ts`), a partitioned table counted once with its partitions: what is using the space.
+ */
+export async function usage(ref: string, options: { days?: number; history?: boolean; tables?: boolean; limit?: number } = {}): Promise<number> {
 	const answer = await api.call<UsageAnswer>('cloud-project-usage', {
 		ref,
 		...(options.days ? { days: options.days } : {})
 	});
 	const summary = summariseUsage(answer.days, answer.limit);
+	const outlook = storageOutlook(answer.days, answer.limit?.maxStorageBytes ?? null);
+	const sizes = options.tables ? await largestTables(ref, options.limit ?? 20) : null;
 
-	emit({ ...answer, summary }, () => {
+	emit({ ...answer, summary, ...(sizes ? { databaseBytes: sizes.databaseBytes, tables: sizes.tables } : {}) }, () => {
 		say(bold(`${answer.name} (${answer.ref})`));
 
 		if (!summary.latest) {
@@ -52,6 +62,18 @@ export async function usage(ref: string, options: { days?: number; history?: boo
 			say(`${describeBytes(summary.latest.dbBytes)} as of ${summary.latest.day}.`);
 		}
 
+		if (outlook.perDay !== null && summary.latest) {
+			const over = `over the last ${outlook.overDays} day${outlook.overDays === 1 ? '' : 's'}`;
+			say(
+				outlook.perDay <= 0
+					? `Not growing ${over}.`
+					: `Growing about ${describeBytes(outlook.perDay)} a day ${over}${outlook.fullOn ? `: full around ${outlook.fullOn} at that rate` : ''}.`
+			);
+		}
+		if (summary.storage && summary.storage.state !== 'ok') {
+			say(dim(`What happens at the limit: ${LIMIT_DOCS}`));
+		}
+
 		if (answer.readOnly && summary.storage?.state !== 'over') {
 			// The row says read-only and the numbers do not agree, which happens in the
 			// minute between shrinking the database and the host lifting the lock.
@@ -61,6 +83,7 @@ export async function usage(ref: string, options: { days?: number; history?: boo
 		say(
 			`Over ${summary.days} day${summary.days === 1 ? '' : 's'}: ${describeCompute(summary.computeSeconds)} of compute, ${summary.connections} connection${summary.connections === 1 ? '' : 's'}.`
 		);
+		say(dim('Compute is the time the database was running (wall clock, not CPU); connections counts every connection opened to the database, not the most at once.'));
 		if (summary.peakDbBytes !== null && summary.latest && summary.peakDbBytes > summary.latest.dbBytes) {
 			say(dim(`Peak in that window was ${describeBytes(summary.peakDbBytes)}.`));
 		}
@@ -80,6 +103,13 @@ export async function usage(ref: string, options: { days?: number; history?: boo
 				])
 			);
 			say(dim('A dash is a day nothing measured it, which is what a paused project looks like.'));
+		}
+
+		if (sizes) {
+			say('');
+			for (const line of describeTables(sizes)) {
+				say(line);
+			}
 		}
 	});
 	return 0;

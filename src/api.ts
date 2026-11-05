@@ -10,7 +10,7 @@
  * is baked in so that `npx snoutdata` needs no configuration at all.
  */
 
-import { findLink, isExpired, readAuth, writeAuth, type StoredAuth } from './config.js';
+import { currentProfile, DEFAULT_PROFILE, findLink, isExpired, readAuth, writeAuth, type StoredAuth } from './config.js';
 import { localConnection, localStackFor, type LocalStack } from './local.js';
 import { CliFailure } from './failure.js';
 import { explainNoHuman, noHumanReason } from './interactive.js';
@@ -54,10 +54,12 @@ export class NotSignedIn extends Error {
  */
 function notSignedInAdvice(): string {
 	const reason = noHumanReason();
+	const profile = currentProfile();
+	const which = profile === DEFAULT_PROFILE ? '' : ` as profile ${profile}`;
 	if (reason) {
-		return `not signed in, and ${explainNoHuman(reason)}. Set SNOUTDATA_ACCESS_TOKEN to a token made at https://dashboard.snoutdata.com/#/tokens, or by \`snoutdata tokens create\` on a machine that is signed in.`;
+		return `not signed in${which}, and ${explainNoHuman(reason)}. Set SNOUTDATA_ACCESS_TOKEN to a token made at https://dashboard.snoutdata.com/#/tokens, or by \`snoutdata tokens create\` on a machine that is signed in.`;
 	}
-	return 'not signed in: run `snoutdata login`, or set SNOUTDATA_ACCESS_TOKEN';
+	return `not signed in${which}: run \`snoutdata login${profile === DEFAULT_PROFILE ? '' : ` --profile ${profile}`}\`, or set SNOUTDATA_ACCESS_TOKEN`;
 }
 
 export interface Project {
@@ -67,8 +69,16 @@ export interface Project {
 	production: boolean;
 	desiredState: string;
 	state: string;
+	/** Shared servers or the account's own; absent from an older control plane. */
+	placement?: 'shared' | 'dedicated';
+	/** A dedicated project's server size; null for a shared one. */
+	serverSize?: string | null;
 	stateDetail: string | null;
 	wakesInstantly: boolean;
+	/** Its server has stopped reporting (2026-10-31): `state` keeps what the server last said, and
+	 *  this is shown beside it. Only ever true for a project meant to be running; absent from an
+	 *  older control plane, which means false. */
+	serverSilent?: boolean;
 	sizeBytes: number | null;
 	/** Over the plan's storage limit, and therefore refusing writes. */
 	readOnly: boolean;
@@ -299,6 +309,53 @@ export interface Who {
  */
 export async function whoami(): Promise<Who> {
 	return call('cloud-whoami');
+}
+
+/** A database token, as the issuer hands it to a signed-in session. */
+export interface DatabaseToken {
+	access_token: string;
+	expires_in: number;
+	/** The user name to log in as with it: `snout_token`. */
+	user: string;
+	/** The role the front door logs in as. */
+	db_role: string;
+}
+
+/**
+ * A database token for this person and project: the password of
+ * `snout_token` through the front door, good for an hour. Straight to the issuer, because it is the
+ * only thing holding the database key; and only with a signed-in session, because the issuer
+ * gives one to a person, never to an `sdt_` token, which may be a script's.
+ */
+export async function databaseToken(ref: string): Promise<DatabaseToken> {
+	const token = await currentToken();
+	if (token.startsWith('sdt_')) {
+		throw new CliFailure(
+			'forbidden',
+			'A database token is given to a person, not to an access token. Sign in with `snoutdata login` and ask again.'
+		);
+	}
+	const response = await doorFetch(ACCOUNTS_URL, identityRoute('/db/session-token', '/db/session-token'), {
+		method: 'POST',
+		key: APP_KEY,
+		headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'x-client-info': CLIENT_INFO },
+		body: JSON.stringify({ project_ref: ref })
+	});
+	const text = await response.text();
+	let parsed: unknown = {};
+	try {
+		parsed = text ? JSON.parse(text) : {};
+	} catch {
+		throw new ApiError(response.status, unreadableAnswer(response.status, response.statusText, text));
+	}
+	if (!response.ok) {
+		const message = errorSentence(parsed) ?? `${response.status} ${response.statusText}`;
+		if (response.status === 401) {
+			throw new NotSignedIn(message);
+		}
+		throw new ApiError(response.status, message, serverCodeOf(parsed), parsed);
+	}
+	return parsed as DatabaseToken;
 }
 
 export async function listProjects(): Promise<{ projects: Project[]; allowance: unknown }> {

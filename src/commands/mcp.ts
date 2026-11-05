@@ -113,7 +113,7 @@ function operations(): McpOperations {
 		usage: (ref, days) => api.call('cloud-project-usage', { ref, ...(days ? { days } : {}) }),
 		exportStatus: (ref) => api.exportStatus(ref),
 		requestExport: (ref) => api.requestExport(ref),
-		resetPassword: (ref) => api.call('cloud-project-reset-password', { ref }),
+		resetPassword: (ref, graceMinutes) => api.call('cloud-project-reset-password', { ref, ...(graceMinutes !== undefined ? { graceMinutes } : {}) }),
 		listTeams: () => api.call('cloud-team-list', {}),
 		// The result-returning halves, for the same reason `pushMigrations` uses one:
 		// stdout is the JSON-RPC wire here.
@@ -197,6 +197,9 @@ function operations(): McpOperations {
 				return { ...asked, settled: false, note: `${ref} has not finished yet. Call list_projects in a few seconds.` };
 			}
 		},
+		// The same function the dashboard's Scale and `projects scale` call; without apply, its preview.
+		scaleProject: (ref, instances, apply) =>
+			api.call('cloud-project-spread', apply ? { ref, instances } : { ref, preview: true, ...(instances === undefined ? {} : { instances }) }),
 		connection: (ref) => api.connection(ref),
 		// The result-returning half, never the printing one: stdout is the JSON-RPC wire
 		// here, and a command that writes to it corrupts the protocol.

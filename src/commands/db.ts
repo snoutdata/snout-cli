@@ -34,7 +34,7 @@ import { pgSslEnv } from '../pgTls.js';
  * Without it the first symptom of a storage quota is `cannot execute INSERT in a read-only
  * transaction` with nothing whatever to connect it to.
  */
-async function warnIfReadOnly(ref: string): Promise<void> {
+export async function warnIfReadOnly(ref: string): Promise<void> {
 	try {
 		const { projects } = await api.listProjects();
 		const project = projects.find((candidate) => candidate.ref === ref);
