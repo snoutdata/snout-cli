@@ -182,7 +182,8 @@ async function currentToken(): Promise<string> {
 export async function call<T>(
 	fn: string,
 	body: unknown = {},
-	method: 'POST' | 'GET' = 'POST'
+	method: 'POST' | 'GET' = 'POST',
+	options: { readOnly?: boolean } = {}
 ): Promise<T> {
 	// A control-plane call about a local project would be a 404 about a project the cloud never
 	// had. Say what it is instead, before asking anybody to sign in for it.
@@ -208,6 +209,7 @@ export async function call<T>(
 	const response = await doorFetch(ACCOUNTS_URL, fnRoute(fn, query), {
 		method,
 		key: APP_KEY,
+		...(options.readOnly ? { readOnly: true } : {}),
 		headers: {
 			Authorization: `Bearer ${token}`,
 			'Content-Type': 'application/json',
@@ -368,7 +370,7 @@ export async function connection(ref: string): Promise<Connection> {
 	if (stack) {
 		return localConnection(stack);
 	}
-	return withKeyNames(await call<Connection>('cloud-project-connection', { ref }));
+	return withKeyNames(await call<Connection>('cloud-project-connection', { ref }, 'POST', { readOnly: true }));
 }
 
 /**

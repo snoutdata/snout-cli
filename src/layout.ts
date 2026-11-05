@@ -12,6 +12,8 @@
  * same body, same headers otherwise.
  */
 
+import { CliFailure } from './failure.js';
+
 /** A route under each vocabulary: the new path first, the path a door older than it serves. */
 export interface Route {
 	readonly path: string;
@@ -71,6 +73,25 @@ export interface DoorRequest {
 	readonly body?: string;
 	/** The app key, sent as `Snout-Key` on a new path and as `apikey` on an earlier one. */
 	readonly key?: string;
+	/** The request only reads, so one lost on the network may be sent again whatever its method. */
+	readonly readOnly?: boolean;
+}
+
+/** How long to wait before each further try of a request lost on the network. */
+const RETRY_DELAYS_MS = [500, 1500];
+
+/** Failed before anything was sent: any request may be tried again, a write included. */
+const NOT_SENT = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'UND_ERR_CONNECT_TIMEOUT']);
+
+/** The errno-like code and the words of the deepest cause of a network failure. */
+function networkCause(error: unknown): { code: string; reason: string } {
+	let cursor: unknown = error;
+	for (let depth = 0; depth < 4 && cursor instanceof Error && cursor.cause; depth += 1) {
+		cursor = cursor.cause;
+	}
+	const code = typeof cursor === 'object' && cursor && 'code' in cursor ? String((cursor as { code: unknown }).code) : '';
+	const words = cursor instanceof Error ? cursor.message : String(cursor);
+	return { code, reason: code && !words.includes(code) ? `${code}: ${words}` : words };
 }
 
 /**
@@ -82,16 +103,32 @@ export async function doorFetch(
 	base: string,
 	route: Route,
 	request: DoorRequest = {},
-	fetcher: typeof fetch = fetch
+	fetcher: typeof fetch = fetch,
+	wait: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 ): Promise<Response> {
 	const host = hostOf(base);
 	const headers = request.headers ?? {};
-	function send(old: boolean): Promise<Response> {
-		return fetcher(`${base}${old ? route.oldPath : route.path}`, {
-			method: request.method ?? 'GET',
-			headers: withKey(headers, request.key, old),
-			body: request.body
-		});
+	const safe = request.readOnly === true || (request.method ?? 'GET') === 'GET';
+	async function send(old: boolean): Promise<Response> {
+		for (let attempt = 0; ; attempt += 1) {
+			try {
+				return await fetcher(`${base}${old ? route.oldPath : route.path}`, {
+					method: request.method ?? 'GET',
+					headers: withKey(headers, request.key, old),
+					body: request.body
+				});
+			} catch (error) {
+				if (!(error instanceof TypeError)) {
+					throw error;
+				}
+				const { code, reason } = networkCause(error);
+				const delay = RETRY_DELAYS_MS[attempt];
+				if (delay === undefined || !(safe || NOT_SENT.has(code))) {
+					throw new CliFailure('network', `Could not reach ${host}: ${reason}.`);
+				}
+				await wait(delay);
+			}
+		}
 	}
 	if (oldHosts.has(host)) {
 		return send(true);

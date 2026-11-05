@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import { browserUrl, doorFetch, fnRoute, forgetHosts, identityRoute, speaksOld } from './layout.js';
 
 interface Seen {
@@ -73,4 +73,49 @@ test('a browser URL is built in the vocabulary the door speaks', async () => {
 	assert.equal(await browserUrl('https://e.example', identityRoute('/provider/start', '/authorize'), 'k', modern.fetcher), 'https://e.example/v1/identity/provider/start');
 	const earlier = door(['/auth/v1']);
 	assert.equal(await browserUrl('https://f.example', identityRoute('/provider/start', '/authorize'), 'k', earlier.fetcher), 'https://f.example/auth/v1/authorize');
+});
+
+describe('a request lost on the network', () => {
+	const lost = (code: string) => Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error(`connect ${code} 1.2.3.4:443`), { code }) });
+	const waited: number[] = [];
+	const wait = async (ms: number) => { waited.push(ms); };
+
+	test('a read is tried again, and comes back', async () => {
+		waited.length = 0;
+		let tries = 0;
+		const response = await doorFetch('https://r.example', fnRoute('x'), { method: 'POST', readOnly: true }, (async () => {
+			tries += 1;
+			if (tries < 3) {
+				throw lost('ECONNRESET');
+			}
+			return new Response('{}');
+		}) as typeof fetch, wait);
+		assert.equal(response.status, 200);
+		assert.deepEqual(waited, [500, 1500]);
+	});
+
+	test('a write that may have been sent is not tried again, and the failure names the address and the reason', async () => {
+		let tries = 0;
+		await assert.rejects(
+			doorFetch('https://w.example', fnRoute('x'), { method: 'POST' }, (async () => {
+				tries += 1;
+				throw lost('ECONNRESET');
+			}) as typeof fetch, wait),
+			(error: Error & { code?: string }) => {
+				assert.equal(error.code, 'network');
+				assert.match(error.message, /Could not reach w\.example: connect ECONNRESET 1\.2\.3\.4:443\./);
+				return true;
+			}
+		);
+		assert.equal(tries, 1);
+	});
+
+	test('a write that never left is tried again, and gives up after three tries', async () => {
+		let tries = 0;
+		await assert.rejects(doorFetch('https://n.example', fnRoute('x'), { method: 'POST' }, (async () => {
+			tries += 1;
+			throw lost('ENOTFOUND');
+		}) as typeof fetch, wait));
+		assert.equal(tries, 3);
+	});
 });
