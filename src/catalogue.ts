@@ -106,6 +106,7 @@ export const COMMANDS = [
 	{ name: 'db access grant', summary: 'Let a person sign in to the database as themselves, and print their connection string', flags: ['--ref', '--level'] },
 	{ name: 'db token', summary: 'A database token: the password of user snout_token, signing in as you, for an hour, from any driver or tool', flags: ['--ref'] },
 	{ name: 'db access revoke', summary: 'Take it away, by email or role; a token already issued can work until it expires (up to 1 hour)', flags: ['--ref'] },
+	{ name: 'db pool', args: '[transaction|session]', summary: 'How connections reach the database: through its pool, or each client on its own', flags: ['--ref'] },
 	{ name: 'db allow', summary: 'The addresses that may connect to the database, and whether yours is one; an empty list is every address', flags: ['--ref'] },
 	{ name: 'db allow add', args: '<cidr>', summary: 'Let an IPv4 or IPv6 address or range connect (at most 50 entries); again with --note changes its note', flags: ['--ref', '--note'] },
 	{ name: 'db allow remove', args: '<cidr>', summary: 'Take an address or range off the list', flags: ['--ref'] },

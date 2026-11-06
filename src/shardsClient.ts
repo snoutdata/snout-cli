@@ -87,11 +87,15 @@ export interface ClusterNode {
 	ranges: { keyspace: string; lo: string; hi: string }[];
 }
 
+/** What `cluster settings` can change: the numbers by name, and how clients share connections. */
+export type SettingsPatch = Partial<Record<SettingName | AdviceSettingName, number>> & { pool_mode?: 'transaction' | 'session' };
+
 export interface ClusterStatus {
 	catalog: boolean;
 	epoch?: number | string;
 	settings?: Record<string, number>;
 	advice_settings?: Record<string, number>;
+	router_settings?: { pool_mode?: string };
 	nodes?: ClusterNode[];
 	keyspaces?: { name: string; key_type: string; seed: string; ranges: ClusterRange[]; pins: { value: string; node: number }[] }[];
 	tables?: { table: string; kind: string; keyspace: string | null; column: string | null }[];
@@ -339,7 +343,7 @@ export interface ShardsClient {
 	job(id: number): Promise<Job>;
 	cancel(id: number): Promise<{ job: number; state: string }>;
 	resume(id: number): Promise<{ job: number; state: string }>;
-	settings(patch: Partial<Record<SettingName | AdviceSettingName, number>>): Promise<{ settings: Record<string, number> }>;
+	settings(patch: SettingsPatch): Promise<{ settings: Record<string, number | string> }>;
 	/** The advisor's recommendations. `sampleMs`: how long to measure write rates over (0: none). */
 	advice(sampleMs?: number): Promise<Advice>;
 	/** The design check: distribution keys, foreign keys and indexes, read from the schema. */
@@ -472,7 +476,7 @@ export class AdminClient implements ShardsClient {
 		return this.#call('POST', `/v1/jobs/${id}/resume`);
 	}
 
-	settings(patch: Partial<Record<SettingName | AdviceSettingName, number>>): Promise<{ settings: Record<string, number> }> {
+	settings(patch: SettingsPatch): Promise<{ settings: Record<string, number | string> }> {
 		return this.#call('POST', '/v1/settings', patch);
 	}
 
@@ -667,7 +671,7 @@ export class CloudShardsClient implements ShardsClient {
 		return this.#send({ action: 'resume', id });
 	}
 
-	settings(patch: Partial<Record<SettingName | AdviceSettingName, number>>): Promise<{ settings: Record<string, number> }> {
+	settings(patch: SettingsPatch): Promise<{ settings: Record<string, number | string> }> {
 		return this.#send({ action: 'settings', settings: patch });
 	}
 

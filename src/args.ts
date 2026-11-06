@@ -156,6 +156,8 @@ const VALUED = new Set([
 	'drain-timeout-ms',
 	'ack-timeout-ms',
 	'copy-mb-per-s',
+	// `shards settings --pool-mode session`: how clients share the database's connections.
+	'pool-mode',
 	// `shards settings --set advice_min_bytes=1,...`: any setting by its API name.
 	'set',
 	// `shards advise --sample-ms N`: how long the advisor measures write rates over.

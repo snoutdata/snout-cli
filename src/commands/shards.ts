@@ -59,6 +59,7 @@ import {
 	type OpBody,
 	type Plan,
 	type SettingName,
+	type SettingsPatch,
 	type ShardsClient
 } from '../shardsClient.js';
 
@@ -709,7 +710,7 @@ export function parseSet(value: string): Partial<Record<SettingName | AdviceSett
 }
 
 async function settingsCommand(args: ParsedArgs, client: () => ShardsClient): Promise<number> {
-	const patch: Partial<Record<SettingName | AdviceSettingName, number>> = {};
+	const patch: SettingsPatch = {};
 	for (const setting of SETTINGS) {
 		Object.assign(patch, optionalInteger(args, SETTING_FLAGS[setting], setting));
 	}
@@ -717,9 +718,20 @@ async function settingsCommand(args: ParsedArgs, client: () => ShardsClient): Pr
 	if (set !== undefined) {
 		Object.assign(patch, parseSet(set));
 	}
+	const poolMode = flagString(args, 'pool-mode');
+	if (poolMode !== undefined) {
+		if (poolMode !== 'transaction' && poolMode !== 'session') {
+			throw new UsageError(`--pool-mode is transaction or session, not "${poolMode}"`);
+		}
+		patch.pool_mode = poolMode;
+	}
 	if (Object.keys(patch).length === 0) {
 		const status = await client().status();
-		const settings = { ...(status.settings ?? {}), ...(status.advice_settings ?? {}) };
+		const settings = {
+			...(status.router_settings?.pool_mode ? { pool_mode: status.router_settings.pool_mode } : {}),
+			...(status.settings ?? {}),
+			...(status.advice_settings ?? {})
+		};
 		emit({ settings }, () => process.stdout.write(`${table(Object.entries(settings).map(([k, v]) => [k, String(v)]))}\n`));
 		return 0;
 	}

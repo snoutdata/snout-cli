@@ -49,6 +49,7 @@ import * as secrets from './commands/secrets.js';
 import * as db from './commands/db.js';
 import { accessCommand, tokenCommand } from './commands/dbAccess.js';
 import { allowCommand } from './commands/dbAllow.js';
+import { poolCommand } from './commands/dbPool.js';
 import * as manage from './commands/manage.js';
 import * as realtime from './commands/realtime.js';
 import * as ai from './commands/ai.js';
@@ -214,6 +215,7 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata db access grant EMAIL [--level full|read]   a teammate, or you; read by default
   snoutdata db access revoke EMAIL|ROLE    take it away
   snoutdata db token [--ref R]             a password for user snout_token: you, for an hour
+  snoutdata db pool [transaction|session] [--ref R]   how connections reach the database (a pool, or each its own)
   snoutdata db allow [list] [--ref R]      the addresses that may connect (empty: every address)
   snoutdata db allow add CIDR [--note TEXT]   an address or a range, such as 203.0.113.0/24
   snoutdata db allow remove CIDR | clear   take one off, or let every address in again
@@ -242,7 +244,7 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
                                            records what it would run, auto runs it (asks first)
   snoutdata cluster plan <operation>        the same dry run
   snoutdata cluster jobs [show|watch|cancel|resume <id>]   the durable job log
-  snoutdata cluster settings [--max-write-pause-ms N ...] [--set advice_min_bytes=N,...]
+  snoutdata cluster settings [--pool-mode transaction|session] [--max-write-pause-ms N ...] [--set advice_min_bytes=N,...]
                                            the cluster's cutover and advisor settings
   snoutdata cluster advise [--sample-ms N]  what to split, move or add, each with its reason, its
                                            plan and the command that runs it; runs nothing
@@ -1080,6 +1082,9 @@ async function run(args: ParsedArgs): Promise<number> {
 				case 'token':
 					// A database token: the password of `snout_token`, for any driver or tool.
 					await tokenCommand(ref());
+					return 0;
+				case 'pool':
+					await poolCommand(ref(), rest);
 					return 0;
 				case 'allow':
 					// The addresses that may connect to the database (359); empty is everyone.
