@@ -31,7 +31,9 @@ test('the APNs body reads the .p8 from a file and names every field the project 
 test('the FCM body is the service-account file as it is', async () => {
 	const dir = await mkdtemp(join(tmpdir(), 'push-cli-'));
 	const file = join(dir, 'sa.json');
+	// nosemgrep: generic.secrets.security.detected-google-gcm-service-account.detected-google-gcm-service-account
 	await writeFile(file, '{"type":"service_account"}');
+	// nosemgrep: generic.secrets.security.detected-google-gcm-service-account.detected-google-gcm-service-account
 	assert.deepEqual(await fcmBody(file), { service_account: '{"type":"service_account"}' });
 	await assert.rejects(() => fcmBody(undefined), /--file/);
 });

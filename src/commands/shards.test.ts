@@ -11,7 +11,7 @@ import { CliFailure } from '../failure.js';
 import { setInteractive } from '../interactive.js';
 import { setQuiet } from '../output.js';
 import { CloudShardsClient, type Advice, type Job, type OpBody, type Plan, type ShardsClient } from '../shardsClient.js';
-import { autopilotLines, autopilotModeSentence, commandFor, describeBytes, follow, parseOp, parseSet, podStep, printAdvice, printAlerts, printPlan, replicaPhrase, shards, slotsPhrase, spareSlots } from './shards.js';
+import { autopilotLines, autopilotModeSentence, commandFor, describeBytes, follow, parseOp, parseSet, podStep, printStatus, printAdvice, printAlerts, printPlan, replicaPhrase, shards, slotsPhrase, spareSlots } from './shards.js';
 
 setQuiet(true);
 // Nobody at a terminal, as in CI: the gate's default.
@@ -693,4 +693,24 @@ test('cluster check prints the findings and exits 1 when one must be fixed', asy
 	const { client, calls } = fake();
 	assert.equal(await run(['check'], { client }), 1);
 	assert.ok(calls.includes('check'));
+});
+
+test('cluster status says which pool mode the cluster is in, and an older router saying nothing prints no line', () => {
+	const printed = (status: Parameters<typeof printStatus>[0]) => {
+		const write = process.stdout.write;
+		let text = '';
+		process.stdout.write = ((chunk: string) => {
+			text += chunk;
+			return true;
+		}) as typeof process.stdout.write;
+		try {
+			printStatus(status);
+		} finally {
+			process.stdout.write = write;
+		}
+		return text;
+	};
+	const status = { catalog: true, epoch: 2, nodes: [] } as unknown as Parameters<typeof printStatus>[0];
+	assert.match(printed({ ...status, router_settings: { pool_mode: 'transaction' } }), /^Pool mode: transaction$/m);
+	assert.doesNotMatch(printed(status), /Pool mode/);
 });

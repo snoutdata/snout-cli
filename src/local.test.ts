@@ -38,6 +38,7 @@ test('a stack folder becomes the owner connection Studio uses, on the loopback a
 	assert.equal(c.database, 'abcdefghjkmnp');
 	assert.equal(c.port, 54342);
 	assert.equal(c.ssl, 'disable');
+	// nosemgrep: generic.secrets.security.detected-username-and-password-in-uri.detected-username-and-password-in-uri
 	assert.equal(c.uri, 'postgresql://abcdefghjkmnp_owner:p%40ss%20w%3Drd@127.0.0.1:54342/abcdefghjkmnp');
 	assert.equal(c.appKey, 'app.jwt');
 	assert.equal(c.serverKey, 'server.jwt');

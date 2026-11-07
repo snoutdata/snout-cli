@@ -1142,6 +1142,9 @@ export function printStatus(status: ClusterStatus): void {
 	if (jobs.length > 0) {
 		line(out, `Unfinished jobs: ${jobs.map((j) => `${j.id} ${j.op} ${j.state}`).join('; ')}`);
 	}
+	if (status.router_settings?.pool_mode) {
+		line(out, `Pool mode: ${status.router_settings.pool_mode}`);
+	}
 	if (status.settings) {
 		say(dim(`Settings: ${Object.entries(status.settings).map(([k, v]) => `${k}=${v}`).join(', ')}`));
 	}
