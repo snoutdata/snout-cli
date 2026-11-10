@@ -1,5 +1,10 @@
 // GENERATED: a copy of SnoutData's AI gateway admin code (index.ts).
 // Do not edit here: edits are overwritten by the build.
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) 2026 SNOUTDATA INC. All rights reserved.
+ *  Licensed under the Apache License, Version 2.0. See LICENSE in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
 // The admin API of a Psyche, the AI gateway (snout-psyche, its README), as one typed client for
 // every screen that manages one: the admin console (the central SnoutData AI Psyche), the
 // dashboard and Studio (a project owner's own), and the CLI. It holds no logic of its own: every
@@ -89,8 +94,14 @@ export interface Price {
 	cache_write?: number
 	/** Dollars per call. */
 	request?: number
+	/** Dollars per web search a provider runs. */
+	web_search?: number
 	long_context?: { above: number; input: number; output: number; cache_read?: number; cache_write?: number }
 }
+
+/** How far a model may reach: nothing on the public internet (only a model server on a private
+ *  network), its provider, or its provider and that provider's web search and fetch tools. */
+export type ModelInternet = 'none' | 'provider' | 'web'
 
 export interface Model {
 	name: string
@@ -116,6 +127,18 @@ export interface Model {
 	problem: string | null
 	/** What it can take, as written; null when it says nothing, which keeps it out of `auto`. */
 	fits: Fits | null
+	/** How far it may reach; absent means `provider`. */
+	internet?: ModelInternet
+	/** What it may be sent in a minute; null when no limit is written. */
+	quota?: Quota | null
+}
+
+/** What a model may be sent in a minute, for a provider's limit Psyche cannot read from its answers. */
+export interface Quota {
+	/** Requests a minute. */
+	requests?: number
+	/** Tokens a minute, prompt and reply together. */
+	tokens?: number
 }
 
 /** What a model can take: its whole window in tokens, and whether it takes tools, images and a
@@ -126,6 +149,8 @@ export interface Fits {
 	tools?: boolean
 	images?: boolean
 	json_schema?: boolean
+	/** The account behind this model keeps nothing from its calls, as its owner says. */
+	no_data_collection?: boolean
 }
 
 /** A model as `PUT` takes it. The PUT REPLACES the model, so a field left out is reset (access to
@@ -143,8 +168,39 @@ export interface ModelInput {
 	price?: Price
 	/** What it can take. Unlike the rest, left out it is KEPT as it was; `{}` clears it. */
 	fits?: Fits
+	/** How far it may reach. Like `fits`, left out it is KEPT as it was. */
+	internet?: ModelInternet
+	/** What it may be sent in a minute. Like `fits`, left out it is KEPT as it was; `{}` clears it. */
+	quota?: Quota
 	enabled?: boolean
 	access?: 'everyone' | 'granted'
+}
+
+/** `order`: as written; `price`: the cheapest first; `latency` and `throughput`: the fastest first,
+ *  as measured (see {@link TargetHealth}), a model not yet measured ahead of them; `weighted`: drawn
+ *  in proportion to the route's weights, health and remaining quota; `balanced`: drawn in proportion
+ *  to price, health, speed, remaining quota and the weights together. */
+export type RouteSort = 'order' | 'price' | 'latency' | 'throughput' | 'weighted' | 'balanced'
+
+/** The most a target of a route may cost, in dollars per million tokens or per request or image. */
+export interface MaxPrice {
+	prompt?: number
+	completion?: number
+	request?: number
+	image?: number
+}
+
+/** What a route requires of every target. A target that does not say it meets one is left out. */
+export interface RouteConstraints {
+	/** The smallest window, in tokens. */
+	context?: number
+	tools?: boolean
+	images?: boolean
+	json_schema?: boolean
+	/** The regions a target may be in; a provider that names no region is in none of them. */
+	regions?: string[]
+	no_data_collection?: boolean
+	max_price?: MaxPrice
 }
 
 /** A name a caller asks for that stands for several models, tried in turn when one fails for a
@@ -153,9 +209,11 @@ export interface Route {
 	name: string
 	/** The models, as written. */
 	targets: string[]
-	/** `order`: as written; `price`: the cheapest first; `latency` and `throughput`: the fastest first,
-	 *  as measured (see {@link TargetHealth}), a model not yet measured ahead of them. */
-	sort: 'order' | 'price' | 'latency' | 'throughput'
+	sort: RouteSort
+	/** A target's share of a `weighted` or `balanced` route, by model name. */
+	weights?: Record<string, number> | null
+	/** What every target must meet. */
+	constraints?: RouteConstraints | null
 	origin: 'file' | 'api'
 	created_at: string
 	updated_at: string
@@ -196,7 +254,11 @@ export interface TargetHealth {
 
 export interface RouteInput {
 	targets: string[]
-	sort?: 'order' | 'price' | 'latency' | 'throughput'
+	sort?: RouteSort
+	/** Left out, a route keeps what it had; `{}` clears them. */
+	weights?: Record<string, number>
+	/** Left out, a route keeps what it had; `{}` clears them. */
+	constraints?: RouteConstraints
 }
 
 /** Everything `model` is, as a `PUT` would write it again unchanged. */
@@ -223,7 +285,18 @@ export function modelInput(model: Model): ModelInput {
 	if (model.fits) {
 		input.fits = model.fits
 	}
+	if (model.internet !== undefined) {
+		input.internet = model.internet
+	}
+	if (model.quota) {
+		input.quota = model.quota
+	}
 	return input
+}
+
+/** Everything `route` is, as a `PUT` would write it again unchanged. */
+export function routeInput(route: Route): RouteInput {
+	return { targets: route.targets, sort: route.sort, weights: route.weights ?? {}, constraints: route.constraints ?? {} }
 }
 
 export type Credential =
@@ -449,6 +522,10 @@ export class PsycheAdmin {
 	/** Makes or changes a model. A model's name may hold `/`, which stays a `/` in the path. */
 	putModel(name: string, input: ModelInput): Promise<Model> {
 		return this.call('PUT', `admin/models/${modelPath(name)}`, input)
+	}
+	/** Sets how far a model may reach, leaving the rest of it as it is. */
+	setInternet(model: Model, internet: ModelInternet): Promise<Model> {
+		return this.putModel(model.name, { ...modelInput(model), internet })
 	}
 	/** Removes a model; one from the providers file is disabled instead. */
 	deleteModel(name: string): Promise<{ name: string; deleted: boolean; disabled: boolean }> {

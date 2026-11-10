@@ -1,5 +1,10 @@
 // GENERATED: a copy of SnoutData's AI gateway admin code (guides.ts).
 // Do not edit here: edits are overwritten by the build.
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) 2026 SNOUTDATA INC. All rights reserved.
+ *  Licensed under the Apache License, Version 2.0. See LICENSE in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
 // Adding a model, as a guide rather than a form: where the model runs, then that place's own steps
 // (connect it, find the model's id, price it), in its own words and with links to its own screens.
 // DATA ONLY, like the dashboard's SSO guide: every surface that adds a model draws these steps its
