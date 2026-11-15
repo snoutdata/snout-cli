@@ -18,7 +18,7 @@ export async function list(): Promise<void> {
 	const { projects, allowance } = await listProjects();
 	emit({ projects, allowance }, () => {
 		if (projects.length === 0) {
-			say('No projects yet. `snoutdata projects create --name "my project"`.');
+			say('No projects yet. `snoutdata projects create --name my-project`.');
 			return;
 		}
 		process.stdout.write(`${table(listRows(projects))}\n`);
