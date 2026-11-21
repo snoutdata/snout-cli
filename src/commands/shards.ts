@@ -1296,7 +1296,7 @@ function printCloud(cloud: CloudShardsView, out: Out): void {
 	if (cloud.router === 'starting') {
 		line(out, 'The router is starting beside the database, which takes about twenty seconds.');
 	} else if (cloud.router === 'paused') {
-		line(out, 'The project is paused; the router wakes with it on the next connection.');
+		line(out, 'The project is paused; the router starts with it when the project is resumed.');
 	}
 	if (cloud.routerError) {
 		line(out, `The router is not answering: ${cloud.routerError}`);

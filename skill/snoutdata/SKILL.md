@@ -5,7 +5,7 @@ description: Create and manage SnoutData Cloud projects, each a hosted Postgres 
 
 # SnoutData Cloud, through the `snoutdata` CLI
 
-A SnoutData Cloud project is a backend: a Postgres 18 database (with `pgvector`) plus auth, storage, a REST and GraphQL data
+A SnoutData Cloud project is a backend: a Postgres database (19 on a new project, with `pgvector`) plus auth, storage, a REST and GraphQL data
 API and Snout Functions in front of it. `@snoutdata/client` is the JavaScript client for all of it.
 Everything is driven by one CLI. Nothing needs installing: every command below can be run as
 `npx snoutdata ...`.
@@ -73,7 +73,7 @@ in this folder or a parent. `init` writes that file.
 | How far back a point-in-time restore can go | `npx snoutdata db restore --window --json` |
 | Rewind to a moment, into a NEW project beside it | `npx snoutdata db restore --at 2026-09-20T14:30:00Z --json` |
 | Load a dump into a project | `npx snoutdata db restore --file backup.dump --json` |
-| Let a person open the database as themselves, with their SnoutData account (Postgres 18; they approve in a browser) | `npx snoutdata db access grant EMAIL --level read\|full --json` |
+| Let a person open the database as themselves, with their SnoutData account (Postgres 18 or newer; they approve in a browser) | `npx snoutdata db access grant EMAIL --level read\|full --json` |
 | Who has database access, and take it away | `npx snoutdata db access --json`, `npx snoutdata db access revoke EMAIL --json` |
 | Auth, storage, data API: on or off | `npx snoutdata products --json` |
 | Turn one on (every plan, including free) | `npx snoutdata products enable auth\|storage\|data-api --json` |
@@ -102,7 +102,7 @@ The project API is `https://<ref>.api.snoutdata.com` (`/v1/data`, `/v1/graph`, `
 `/v1/files`, `/v1/live`, `/v1/fn/<name>`, `/containers/v1/<name>/`), with the key in the `Snout-Key` header. The server key
 bypasses row-level security: keep it on a server, never in client code.
 
-Database sign-in (Postgres 18 projects): `read` reads the project's own tables (including rows
+Database sign-in (Postgres 18 or newer): `read` reads the project's own tables (including rows
 row-level security would hide) and writes nothing, and never the `snout_identity`, `snout_files` or internal
 schemas; `full` is everything the project password can do. The person connects with psql 18 plus
 `libpq-oauth`, using the connection string `grant` prints (it holds `oauth_issuer` and

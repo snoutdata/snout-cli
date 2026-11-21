@@ -51,6 +51,7 @@ import { accessCommand, tokenCommand } from './commands/dbAccess.js';
 import { allowCommand } from './commands/dbAllow.js';
 import { poolCommand } from './commands/dbPool.js';
 import * as manage from './commands/manage.js';
+import { sitesCommand } from './commands/sites.js';
 import * as realtime from './commands/realtime.js';
 import * as ai from './commands/ai.js';
 import { authCommand } from './commands/auth.js';
@@ -154,6 +155,11 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
   snoutdata domains [--ref R]              your own domains in front of the project's API
   snoutdata domains add|verify|remove <hostname> [--ref R]
 
+  snoutdata sites [--ref R]                your front ends at <name>.snoutpages.dev
+  snoutdata sites deploy <folder> [--name N]   a built folder (dist, build, out), published
+  snoutdata sites rollback <name> <deployment id>
+  snoutdata sites delete <name>
+
   snoutdata usage [--ref R] [--days 30] [--history]   size, compute, and the plan's limit
   snoutdata usage --tables [--limit 20]    and the largest tables, partitions under their parent
   snoutdata metrics [--ref R] [--node REF] [--window hour|day|week]
@@ -211,7 +217,7 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
                                            one works for --grace minutes (default 60, up to 1440;
                                            0 stops it now and ends its connections)
   snoutdata db access [list] [--ref R]     who signs in to the database as themselves
-                                           (OAuth, Postgres 18), and as which role
+                                           (OAuth, Postgres 18+), and as which role
   snoutdata db access grant EMAIL [--level full|read]   a teammate, or you; read by default
   snoutdata db access revoke EMAIL|ROLE    take it away
   snoutdata db token [--ref R]             a password for user snout_token: you, for an hour
@@ -1011,6 +1017,10 @@ async function run(args: ParsedArgs): Promise<number> {
 		}
 		case 'domains': {
 			await manage.domainsCommand(ref(), action, rest[0]);
+			return 0;
+		}
+		case 'sites': {
+			await sitesCommand(ref(), action, rest, { name: flagString(args, 'name') });
 			return 0;
 		}
 		case 'alerts': {

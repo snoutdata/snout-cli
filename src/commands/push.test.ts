@@ -10,12 +10,12 @@ import { runPush, type PushHost, type SqlSession } from './push.js';
 const REF = 'b7kq2m9xt4rvz';
 
 /** A database that remembers what each connection was sent, and fails where it is told to. */
-function fakeDatabase(options: { ledger?: { name: string; checksum: string }[]; failOn?: RegExp; failMessage?: string } = {}) {
+function fakeDatabase(options: { ledger?: { name: string; checksum: string }[]; failOn?: RegExp; failMessage?: string; state?: string } = {}) {
 	const connections: string[][] = [];
 	const ledger = [...(options.ledger ?? [])];
 	const copies: string[] = [];
 	const host: PushHost = {
-		connection: async () => ({ host: 'h', port: 5432, database: 'd', user: 'u', password: 'p', ssl: 'require', wakesInstantly: true }),
+		connection: async () => ({ host: 'h', port: 5432, database: 'd', user: 'u', password: 'p', ssl: 'require', wakesInstantly: true, state: options.state ?? 'ready' }),
 		open: async () => {
 			const sent: string[] = [];
 			connections.push(sent);
@@ -54,6 +54,16 @@ function folder(files: Record<string, string>): string {
 function sha(text: string): string {
 	return createHash('sha256').update(text, 'utf8').digest('hex');
 }
+
+test('a paused project is refused before any connection, with the resume command', async () => {
+	const dir = folder({ '001-a.sql': 'create table a (id int);' });
+	const db = fakeDatabase({ state: 'paused' });
+	await assert.rejects(runPush(REF, { dir }, () => {}, db.host), (error: Error) => {
+		assert.match(error.message, new RegExp(`snoutdata projects resume --ref ${REF}`));
+		return true;
+	});
+	assert.equal(db.connections.length, 0);
+});
 
 test('each migration runs on its own connection, a statement at a time, inside begin and commit with its ledger row', async () => {
 	const dir = folder({ '001-a.sql': 'create table a (id int);\ninsert into a values (1);\n', '002-b.sql': 'create table b (id int)' });

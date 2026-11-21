@@ -32,7 +32,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join, relative as relativePath, resolve } from 'node:path';
 import { connection, type Connection } from '../api.js';
 import { bold, emit, say, warn } from '../output.js';
-import { CliFailure, fail } from '../failure.js';
+import { CliFailure, fail, pausedFailure } from '../failure.js';
 import { planMigrations, wantsTransaction, type MigrationFile } from '../migrations.js';
 import { describePgError, PgConnectError, PgServerError, PgSession, type PgResult, type PgTarget } from '../pgWire.js';
 import { endsTransaction, splitScript, type ScriptStatement } from '../sqlScript.js';
@@ -97,7 +97,7 @@ export interface SqlSession {
 
 /** What `runPush` reaches the world through. Tests hand it a fake database. */
 export interface PushHost {
-	connection(ref: string): Promise<Pick<Connection, keyof PgTarget | 'wakesInstantly'>>;
+	connection(ref: string): Promise<Pick<Connection, keyof PgTarget | 'wakesInstantly' | 'state'>>;
 	open(target: PgTarget): Promise<SqlSession>;
 }
 
@@ -274,8 +274,8 @@ export async function runPush(
 		password: details.password,
 		ssl: details.ssl
 	};
-	if (!details.wakesInstantly) {
-		record('This project is paused; the connection will wake it, which takes a few seconds.');
+	if (details.state === 'paused') {
+		throw pausedFailure(ref);
 	}
 	const already = await readLedger(host, target, ref);
 	const plan = planMigrations(files, already, { outOfOrder: options.outOfOrder });

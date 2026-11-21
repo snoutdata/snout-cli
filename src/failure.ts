@@ -235,3 +235,11 @@ const NETWORK_ERRNO = new Set([
 	'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
 	'DEPTH_ZERO_SELF_SIGNED_CERT'
 ]);
+
+/**
+ * A paused project is never woken by connecting to it (2026-11-18): only Resume starts it. Said
+ * before the connection is tried, so the person reads the command rather than a refused login.
+ */
+export function pausedFailure(ref: string): CliFailure {
+	return new CliFailure('conflict', `${ref} is paused. Resume it first: snoutdata projects resume --ref ${ref}`, { ref });
+}

@@ -29,7 +29,7 @@
 
 import { readFileSync, statSync } from 'node:fs';
 import { connection } from '../api.js';
-import { CliFailure, fail } from '../failure.js';
+import { CliFailure, fail, pausedFailure } from '../failure.js';
 import { wantsTransaction } from '../migrations.js';
 import { dim, emit, relative, say, table } from '../output.js';
 import { describePgError, PgConnectError, PgServerError, PgSession, type PgTarget } from '../pgWire.js';
@@ -48,8 +48,8 @@ const LIVE: SqlHost = {
 /** Connect to the project's database, run `work`, and close, failing in a sentence when it cannot connect. */
 async function withDatabase<T>(ref: string, host: SqlHost, work: (session: SqlSession) => Promise<T>): Promise<T> {
 	const details = await host.connection(ref);
-	if (!details.wakesInstantly) {
-		say('This project is paused; the connection will wake it, which takes a few seconds.');
+	if (details.state === 'paused') {
+		throw pausedFailure(ref);
 	}
 	const target: PgTarget = {
 		host: details.host,

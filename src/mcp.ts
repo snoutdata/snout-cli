@@ -284,12 +284,12 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'get_connection_url',
-		description: 'The postgres:// URL for a project, ready to put in DATABASE_URL. IT CONTAINS A LIVE PASSWORD, so treat it as a credential and do not print it into a log or a file that is committed. Connecting to a paused project wakes it, which takes a few seconds.',
+		description: 'The postgres:// URL for a project, ready to put in DATABASE_URL. IT CONTAINS A LIVE PASSWORD, so treat it as a credential and do not print it into a log or a file that is committed. A paused project refuses connections until resume_project starts it.',
 		inputSchema: object({ ref: STRING }, ['ref'])
 	},
 	{
 		name: 'pause_project',
-		description: 'Stop a project, and wait until it is paused. Its data is kept and the next connection wakes it. A production project refuses this.',
+		description: 'Stop a project, and wait until it is paused. Its data is kept, and only resume_project (or Resume on the dashboard) starts it again. A production project refuses this.',
 		inputSchema: object({ ref: STRING }, ['ref'])
 	},
 	{
@@ -300,7 +300,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'resume_project',
-		description: 'Start a paused project without waiting for a connection to wake it, and wait until it is ready.',
+		description: 'Start a paused project, and wait until it is ready. A paused project refuses connections until it is resumed.',
 		inputSchema: object({ ref: STRING }, ['ref'])
 	},
 	{

@@ -249,7 +249,7 @@ snoutdata db query "SQL" [--ref R]                # run SQL, no psql needed; row
 snoutdata db run FILE.sql [--ref R]               # a file in one transaction, no psql needed
 snoutdata db slow [--limit 10]                    # the statements that took the most time
 snoutdata db reset-password [--grace 60]          # new password, other owner login; old one works 60 min
-snoutdata db access [--ref R]                     # who signs in as themselves (Postgres 18)
+snoutdata db access [--ref R]                     # who signs in as themselves (Postgres 18+)
 snoutdata db access grant EMAIL [--level full|read]   # prints their connection string
 snoutdata db access revoke EMAIL|ROLE
 snoutdata db token [--ref R]                      # a password for user snout_token: you, for an hour

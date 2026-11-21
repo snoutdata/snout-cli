@@ -17,7 +17,7 @@ import { open } from 'node:fs/promises';
 import { classifyRestoreErrors, planRestore, PRODUCT_ROLE, restoreVerdict, dumpFormat, type RestorePlan } from '../restore.js';
 import { getProducts } from './manage.js';
 import * as api from '../api.js';
-import { CliFailure, fail } from '../failure.js';
+import { CliFailure, fail, pausedFailure } from '../failure.js';
 import { canAsk, explainNoHuman, noHumanReason } from '../interactive.js';
 import { connection } from '../api.js';
 import { dim, emit, relative, say, warn } from '../output.js';
@@ -80,8 +80,8 @@ export async function psql(ref: string, rest: readonly string[]): Promise<number
 	}
 	await warnIfReadOnly(ref);
 	const details = await connection(ref);
-	if (!details.wakesInstantly) {
-		say('This project is paused; the connection will wake it, which takes a few seconds.');
+	if (details.state === 'paused') {
+		throw pausedFailure(ref);
 	}
 	// Everything but the password on the command line, and the password in the child's
 	// environment. psql reads PGPASSWORD without being asked.
@@ -396,8 +396,8 @@ export async function restoreDatabase(
 	const format = dumpFormat(head.slice(0, read.bytesRead));
 
 	const details = await connection(ref);
-	if (!details.wakesInstantly) {
-		say('This project is paused; the connection will wake it, which takes a few seconds.');
+	if (details.state === 'paused') {
+		throw pausedFailure(ref);
 	}
 	const { projects } = await api.listProjects();
 	const project = projects.find((candidate) => candidate.ref === ref);
