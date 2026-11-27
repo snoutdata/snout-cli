@@ -406,6 +406,7 @@ test('set_product checks its product and its switch before calling anything', as
 	assert.ok(isError(await call('set_product', { ref: 'r', product: 'email', enabled: true })));
 	assert.ok(isError(await call('set_product', { ref: 'r', product: 'storage' })));
 	assert.match(text(await call('set_product', { ref: 'r', product: 'storage', enabled: true })), /"enabled": true/);
+	assert.match(text(await call('set_product', { ref: 'r', product: 'realtime', enabled: false })), /"product": "realtime"/);
 });
 
 test('a domain tool needs a hostname, and passes its verb through', async () => {

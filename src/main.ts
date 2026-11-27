@@ -116,9 +116,9 @@ const USAGE = `snoutdata ${VERSION} — hosted Postgres, from a terminal or an a
 
   snoutdata projects show [--ref R]        one project: state, products, functions, domains
 
-  snoutdata products [--ref R]             auth, storage, the data API and push: on or off;
-                                           Realtime is always on (shown, not switched)
-  snoutdata products enable|disable auth|storage|data-api|push [--ref R]
+  snoutdata products [--ref R]             auth, storage, the data API, push and Realtime:
+                                           on or off
+  snoutdata products enable|disable auth|storage|data-api|push|realtime [--ref R]
   snoutdata push credentials [--ref R]     push keys: what is set (never the keys)
   snoutdata push credentials set apns --p8 FILE --key-id ID --team-id ID --topic BUNDLE [--environment E]
   snoutdata push credentials set fcm --file service-account.json

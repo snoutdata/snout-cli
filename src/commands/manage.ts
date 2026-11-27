@@ -15,9 +15,9 @@ import { fail } from '../failure.js';
 import { bold, dim, emit, isJsonMode, say, table } from '../output.js';
 import { restoreReason } from '../mcp.js';
 
-export type Product = 'auth' | 'storage' | 'data-api' | 'push';
+export type Product = 'auth' | 'storage' | 'data-api' | 'push' | 'realtime';
 
-export const PRODUCTS: readonly Product[] = ['auth', 'storage', 'data-api', 'push'];
+export const PRODUCTS: readonly Product[] = ['auth', 'storage', 'data-api', 'push', 'realtime'];
 
 export interface Products {
 	ref: string;
@@ -25,21 +25,17 @@ export interface Products {
 	storage: { enabled: boolean; pending: boolean; bytes: number | null; files: number | null } | { error: string };
 	dataApi: { enabled: boolean; allowedOnPlan: boolean } | { error: string };
 	push: { enabled: boolean; scheduling: boolean } | { error: string };
-	/**
-	 * Realtime has no switch: signals and the roster are on for every project from the moment it
-	 * exists. It is listed anyway, because a list of products that leaves it out reads as "nothing
-	 * is on" to somebody whose game is using it right now.
-	 */
-	realtime: { enabled: true; broadcast: true; presence: true; tableChanges: string };
+	/** What the plan gives when it is on: signals and the roster on every plan, table changes on paid plans. */
+	realtime: { enabled: boolean; broadcast: true; presence: true; tableChanges: string } | { error: string };
 }
 
 function reason(error: unknown): { error: string } {
 	return { error: error instanceof Error ? error.message : String(error) };
 }
 
-/** All four, each allowed to fail on its own: one refusing must not hide the others. */
+/** All five, each allowed to fail on its own: one refusing must not hide the others. */
 export async function getProducts(ref: string): Promise<Products> {
-	const [auth, storage, dataApi, push] = await Promise.all([
+	const [auth, storage, dataApi, push, realtime] = await Promise.all([
 		api.call<{ enabled?: boolean; google?: { enabled?: boolean }; saml?: { enabled?: boolean } }>('cloud-project-auth', { ref, action: 'status' })
 			.then((a) => ({ enabled: a.enabled === true, google: a.google?.enabled === true, saml: a.saml?.enabled === true }), reason),
 		api.call<{ storage?: { enabled: boolean; pending: boolean; bytes: number | null; files: number | null } }>('cloud-project-storage', { ref })
@@ -48,11 +44,13 @@ export async function getProducts(ref: string): Promise<Products> {
 			.then((a) => ({ enabled: a.dataApi?.enabled === true, allowedOnPlan: a.dataApi?.allowed === true }), reason),
 		api.call<{ push?: { enabled: boolean; scheduling: boolean } }>('cloud-project-push', { ref })
 			.then((a) => ({ enabled: a.push?.enabled === true, scheduling: a.push?.scheduling === true }), reason),
+		api.call<{ realtime?: { enabled: boolean } }>('cloud-project-realtime-switch', { ref })
+			.then((a) => ({ enabled: a.realtime?.enabled === true, ...REALTIME_PLAN }), reason),
 	]);
-	return { ref, auth, storage, dataApi, push, realtime: REALTIME };
+	return { ref, auth, storage, dataApi, push, realtime };
 }
 
-const REALTIME = { enabled: true, broadcast: true, presence: true, tableChanges: 'every paid plan (Plus, Pro and Business)' } as const;
+const REALTIME_PLAN = { broadcast: true, presence: true, tableChanges: 'every paid plan (Plus, Pro and Business)' } as const;
 
 export function parseProduct(word: string | undefined): Product {
 	const product = (word ?? '').toLowerCase().replace('_', '-').replace(/^dataapi$/, 'data-api');
@@ -79,6 +77,15 @@ export async function setProduct(ref: string, product: Product, enabled: boolean
 				: 'Push is off. Devices, the log and the keys stay in the push schema.'
 		};
 	}
+	if (product === 'realtime') {
+		await api.call('cloud-project-realtime-switch', { ref, enable: enabled });
+		return {
+			ref,
+			product,
+			enabled,
+			note: enabled ? 'Realtime starts within a minute, when the host picks up the change.' : 'Realtime is off. Your publication and tables stay as they are.'
+		};
+	}
 	await api.call(product === 'storage' ? 'cloud-project-storage' : 'cloud-project-data-api', { ref, enable: enabled });
 	return { ref, product, enabled, note: enabled ? `${product} starts within a minute, when the host picks up the change.` : `${product} is off.` };
 }
@@ -99,13 +106,13 @@ export async function productsCommand(ref: string): Promise<void> {
 			line('storage', storage, 'pending' in storage && storage.pending ? 'waiting for the host' : ''),
 			line('data-api', dataApi, 'allowedOnPlan' in dataApi && !dataApi.allowedOnPlan ? 'not on this plan' : ''),
 			line('push', answer.push, 'scheduling' in answer.push && answer.push.enabled && !answer.push.scheduling ? 'scheduled sends on paid plans' : ''),
-			line('realtime', answer.realtime, 'always on: signals, roster; table changes on Plus, Pro and Business'),
+			line('realtime', answer.realtime, 'signals, roster; table changes on Plus, Pro and Business'),
 		])}\n`);
 		// The hint names a product that is actually OFF, or nothing: it used to say "enable
-		// storage" on a project where all four were already on.
+		// storage" on a project where all of them were already on.
 		const isOff = (value: unknown): boolean =>
 			Boolean(value && typeof value === 'object' && 'enabled' in value && !(value as { enabled: boolean }).enabled);
-		const off = (['auth', 'storage', 'data-api', 'push'] as const).find((name) =>
+		const off = PRODUCTS.find((name) =>
 			isOff(name === 'data-api' ? dataApi : answer[name])
 		);
 		if (off) {
@@ -278,8 +285,7 @@ export async function showCommand(ref: string): Promise<void> {
 			// Optional: a control plane older than 2026-10-05 does not send it, and a row that
 			// said "unknown" would be a guess dressed as an answer.
 			...(typeof p.postgresVersion === 'number' ? [['postgres', String(p.postgresVersion)]] : []),
-			['auth / storage / data-api / push', `${on(p.products.auth)} / ${on(p.products.storage)} / ${on(p.products.dataApi)} / ${on(p.products.push)}`],
-			['realtime', 'on (signals and the roster on every plan; table changes on Plus, Pro and Business)'],
+			['auth / storage / data-api / push / realtime', `${on(p.products.auth)} / ${on(p.products.storage)} / ${on(p.products.dataApi)} / ${on(p.products.push)} / ${on(p.products.realtime)}`],
 			['functions', list(p.functions)],
 			['secrets', list(p.secretNames)],
 			['domains', list(p.domains)],

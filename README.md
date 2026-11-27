@@ -137,7 +137,7 @@ snoutdata teams                                   # teams you can share a projec
 
 ```bash
 snoutdata products [--ref R]                      # auth, storage, the data API and push: on or off
-snoutdata products enable|disable auth|storage|data-api|push [--ref R]
+snoutdata products enable|disable auth|storage|data-api|push|realtime [--ref R]
 snoutdata keys [--ref R]                          # the app key and the server key
 snoutdata keys rotate --force [--ref R]           # new keys, breaking every one already issued
 snoutdata domains [--ref R]                       # your own domains in front of the project's API
@@ -145,7 +145,7 @@ snoutdata domains add <hostname>                  # prints the DNS records to pu
 snoutdata domains verify|remove <hostname>
 ```
 
-Realtime is always on; `products` lists it but does not switch it.
+Realtime starts off, like the others. On: signals and the roster on every plan, table changes on Plus, Pro and Business. Off keeps the publication and its tables.
 
 **Auth settings**
 

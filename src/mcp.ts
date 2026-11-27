@@ -100,7 +100,7 @@ export interface McpOperations {
 	/** One project whole: the list row plus products, function and secret names, domains. */
 	getProject(ref: string): Promise<unknown>;
 	getProducts(ref: string): Promise<unknown>;
-	setProduct(ref: string, product: 'auth' | 'storage' | 'data-api', enabled: boolean): Promise<unknown>;
+	setProduct(ref: string, product: 'auth' | 'storage' | 'data-api' | 'realtime', enabled: boolean): Promise<unknown>;
 	listDomains(ref: string): Promise<unknown>;
 	domainAction(ref: string, action: 'add' | 'verify' | 'remove', hostname: string): Promise<unknown>;
 	restoreWindow(ref: string): Promise<unknown>;
@@ -424,18 +424,18 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'get_project',
-		description: 'Everything about one project in one call: its state, region and size, which products are on (auth, storage, data-api), the names of its deployed functions and function secrets, and its custom domains. Never a password, a key or a download link (export_status has the link to the last export).',
+		description: 'Everything about one project in one call: its state, region and size, which products are on (auth, storage, data-api, push, realtime), the names of its deployed functions and function secrets, and its custom domains. Never a password, a key or a download link (export_status has the link to the last export).',
 		inputSchema: object({ ref: STRING }, ['ref'])
 	},
 	{
 		name: 'list_products',
-		description: "Whether a project's auth (user sign-up and sign-in), storage (files) and data API (REST and GraphQL over its tables) are on, and whether the plan allows the data API.",
+		description: "Whether a project's auth (user sign-up and sign-in), storage (files), data API (REST and GraphQL over its tables), push and Realtime (signals, the roster, and table changes on Plus, Pro and Business) are on, and whether the plan allows the data API.",
 		inputSchema: object({ ref: STRING }, ['ref'])
 	},
 	{
 		name: 'set_product',
-		description: 'Turn auth, storage or data-api on or off for a project. It starts within about a minute. All three are on every plan, including free.',
-		inputSchema: object({ ref: STRING, product: { type: 'string', enum: ['auth', 'storage', 'data-api'] }, enabled: { type: 'boolean' } }, ['ref', 'product', 'enabled'])
+		description: 'Turn auth, storage, data-api or realtime on or off for a project. It starts within about a minute. All four are on every plan, including free (Realtime\'s table changes need Plus, Pro or Business). Turning realtime off keeps the publication and its tables.',
+		inputSchema: object({ ref: STRING, product: { type: 'string', enum: ['auth', 'storage', 'data-api', 'realtime'] }, enabled: { type: 'boolean' } }, ['ref', 'product', 'enabled'])
 	},
 	{
 		name: 'list_domains',
@@ -1036,8 +1036,8 @@ async function callTool(
 				return said(id, await operations.getProducts(ref!));
 			case 'set_product': {
 				const product = stringArg(args, 'product');
-				if (product !== 'auth' && product !== 'storage' && product !== 'data-api') {
-					return said(id, 'set_product needs product: auth, storage or data-api.', true);
+				if (product !== 'auth' && product !== 'storage' && product !== 'data-api' && product !== 'realtime') {
+					return said(id, 'set_product needs product: auth, storage, data-api or realtime.', true);
 				}
 				if (typeof args.enabled !== 'boolean') {
 					return said(id, 'set_product needs enabled: true or false.', true);
